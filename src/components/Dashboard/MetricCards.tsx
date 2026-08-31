@@ -1,14 +1,36 @@
 'use client';
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Users, GraduationCap, User, UserX } from 'lucide-react';
 import { COLLEGE_METRICS } from '../../lib/mockDatabase';
+import { DashboardMetricsResult } from '../../backend/services/metricsService';
 
 export const MetricCards: React.FC = () => {
+  const [metrics, setMetrics] = useState<DashboardMetricsResult>({
+    ...COLLEGE_METRICS,
+    courses: [],
+    dataSource: 'IN_MEMORY_FALLBACK',
+  });
+
+  useEffect(() => {
+    async function loadMetrics() {
+      try {
+        const res = await fetch('/api/metrics');
+        if (res.ok) {
+          const data = await res.json();
+          setMetrics(data);
+        }
+      } catch (err) {
+        console.warn('Could not fetch live metrics, using local state:', err);
+      }
+    }
+    loadMetrics();
+  }, []);
+
   const cards = [
     {
       id: 'staff',
-      count: COLLEGE_METRICS.totalStaff,
+      count: metrics.totalStaff,
       label: 'Total Staff',
       icon: Users,
       bgGradient: 'from-[#FFEBF0] to-[#FFF5F7]',
@@ -19,7 +41,7 @@ export const MetricCards: React.FC = () => {
     },
     {
       id: 'students',
-      count: COLLEGE_METRICS.totalStudents,
+      count: metrics.totalStudents,
       label: 'Total Students',
       icon: GraduationCap,
       bgGradient: 'from-[#EBF3FF] to-[#F5F8FF]',
@@ -30,7 +52,7 @@ export const MetricCards: React.FC = () => {
     },
     {
       id: 'boys',
-      count: COLLEGE_METRICS.totalBoys,
+      count: metrics.totalBoys,
       label: 'Total Boys',
       icon: User,
       bgGradient: 'from-[#FFF8EB] to-[#FFFAF2]',
@@ -42,7 +64,7 @@ export const MetricCards: React.FC = () => {
     },
     {
       id: 'girls',
-      count: COLLEGE_METRICS.totalGirls,
+      count: metrics.totalGirls,
       label: 'Total Girls',
       icon: User,
       bgGradient: 'from-[#EBFBF3] to-[#F5FCF8]',
@@ -53,7 +75,7 @@ export const MetricCards: React.FC = () => {
     },
     {
       id: 'not-specified',
-      count: COLLEGE_METRICS.notSpecified,
+      count: metrics.notSpecified,
       label: 'Not Specified',
       icon: UserX,
       bgGradient: 'from-[#FFEBEF] to-[#FFF5F7]',

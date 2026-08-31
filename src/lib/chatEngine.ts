@@ -172,9 +172,13 @@ export class OrchestratorAgent {
 
   /**
    * Main Pipeline:
-   * Faculty/User Input -> Sanitization -> Student Resolver -> Tier 1/2 Matcher -> Supabase Fee/Attendance Agent -> Output
+   * Faculty/User Input -> Role Authorization -> Student Resolver -> Tier 1/2 Matcher -> Supabase Fee/Attendance Agent -> Output
    */
-  public static async processQuery(rawInput: string, userId: string = 'st-00'): Promise<ChatMessageResponse> {
+  public static async processQuery(
+    rawInput: string, 
+    userId: string = 'st-00', 
+    userRole: 'ADMIN' | 'FACULTY' | 'STUDENT' = 'ADMIN'
+  ): Promise<ChatMessageResponse> {
     const sanitized = this.sanitizeInput(rawInput);
     if (!sanitized) {
       return {
@@ -182,6 +186,21 @@ export class OrchestratorAgent {
         agent: 'ORCHESTRATOR',
         confidenceTier: 'TIER_1_REGEX'
       };
+    }
+
+    // Role-based Access Control (RBAC): Protect sensitive aggregate finances for Student roles
+    if (userRole === 'STUDENT') {
+      if (FEE_KEYWORDS.test(sanitized) && SCOPE_REGEX.AGGREGATE.test(sanitized)) {
+        return {
+          text: "🔒 **Access Restricted**: Institutional fee collection summaries and financial audits are restricted to Faculty and College Administrators. You can ask about your own fee status or attendance records.",
+          agent: 'ORCHESTRATOR',
+          confidenceTier: 'TIER_1_REGEX',
+          quickActions: [
+            { label: 'My Pending Fee', query: 'What is my pending fee balance?' },
+            { label: 'My Attendance Percentage', query: 'Show my current attendance' },
+          ]
+        };
+      }
     }
 
     // Step 1: Student Resolver (Asynchronously checks Supabase public.students + fallback)

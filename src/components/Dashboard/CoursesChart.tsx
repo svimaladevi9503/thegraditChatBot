@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   BarChart, 
   Bar, 
@@ -11,11 +11,30 @@ import {
   ResponsiveContainer, 
   Cell 
 } from 'recharts';
-import { BarChart3, Radio } from 'lucide-react';
-import { COURSES_DATA } from '../../lib/mockDatabase';
+import { BarChart3 } from 'lucide-react';
+import { COURSES_DATA, Course } from '../../lib/mockDatabase';
 
 export const CoursesChart: React.FC = () => {
-  const chartData = COURSES_DATA.map(course => ({
+  const [courses, setCourses] = useState<Course[]>(COURSES_DATA);
+
+  useEffect(() => {
+    async function loadCourses() {
+      try {
+        const res = await fetch('/api/metrics');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.courses && data.courses.length > 0) {
+            setCourses(data.courses);
+          }
+        }
+      } catch (err) {
+        console.warn('Could not fetch live courses, using local state:', err);
+      }
+    }
+    loadCourses();
+  }, []);
+
+  const chartData = courses.map(course => ({
     name: course.name,
     shortName: course.name.length > 14 ? course.name.substring(0, 12) + '...' : course.name,
     students: course.studentsCount,
@@ -95,7 +114,7 @@ export const CoursesChart: React.FC = () => {
           <span className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1">
             Courses
           </span>
-          {COURSES_DATA.map((course) => (
+          {courses.map((course) => (
             <div key={course.id} className="flex items-center gap-2 text-xs">
               <span 
                 className="w-3 h-3 rounded-md shrink-0" 
