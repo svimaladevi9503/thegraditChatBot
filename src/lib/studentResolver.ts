@@ -1,4 +1,4 @@
-import { StudentService, StudentResolutionResult } from '../backend/services/studentService';
+import { StudentService, StudentResolutionResult, QueryStatus } from '../backend/services/studentService';
 import { Student } from './mockDatabase';
 
 export interface ResolvedStudent {
@@ -11,26 +11,45 @@ export interface ResolvedStudent {
   confidence: number;
 }
 
+export interface DetailedResolverOutput {
+  status: QueryStatus;
+  resolvedStudent: ResolvedStudent | null;
+  multipleMatches?: Student[];
+  isAmbiguous?: boolean;
+  errorMessage?: string;
+}
+
 export class StudentResolver {
   /**
-   * Detailed resolution supporting multiple ambiguous matches
+   * Detailed resolution supporting multiple ambiguous matches & 3-tier status
    */
-  public static async resolveDetailed(query: string): Promise<{
-    resolvedStudent: ResolvedStudent | null;
-    multipleMatches?: Student[];
-    isAmbiguous?: boolean;
-  }> {
-    if (!query) return { resolvedStudent: null };
+  public static async resolveDetailed(query: string): Promise<DetailedResolverOutput> {
+    if (!query) return { status: 'NOT_FOUND', resolvedStudent: null };
     const res: StudentResolutionResult = await StudentService.findStudentDetailed(query);
+    
+    if (res.status === 'CONNECTION_ERROR') {
+      return {
+        status: 'CONNECTION_ERROR',
+        resolvedStudent: null,
+        errorMessage: res.errorMessage || "I'm unable to access student records right now. Please try again.",
+      };
+    }
+
     if (res.isAmbiguous && res.multipleMatches) {
       return {
+        status: 'SUCCESS',
         resolvedStudent: null,
         multipleMatches: res.multipleMatches,
         isAmbiguous: true,
       };
     }
-    if (!res.student) return { resolvedStudent: null };
+
+    if (!res.student || res.status === 'NOT_FOUND') {
+      return { status: 'NOT_FOUND', resolvedStudent: null };
+    }
+
     return {
+      status: 'SUCCESS',
       resolvedStudent: {
         id: res.student.id,
         name: res.student.name,

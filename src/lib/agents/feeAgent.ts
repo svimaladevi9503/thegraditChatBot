@@ -1,5 +1,5 @@
 import { FeeRecord } from '../mockDatabase';
-import { FeeService } from '../../backend/services/feeService';
+import { FeeService, FeeQueryResult } from '../../backend/services/feeService';
 import { ExportDataPayload } from '../exportUtils';
 import { ResolvedStudent } from '../studentResolver';
 
@@ -39,9 +39,10 @@ export interface FeeAgentResult {
 
 export class FeeAgent {
   /**
-   * Core Fee Calculation Formula:
-   * Faculty/User -> Orchestrator -> Student Resolver -> Fee Agent -> Supabase DB (student_fee_summary view)
-   * Formula: {time period} + {DB data} + {intent [.pdf / .xlsx / .docs / answer]}
+   * Fee Calculation Pipeline:
+   * 1. Supabase returns data -> Show live data
+   * 2. Supabase returns no student -> "I couldn't find a student matching that name."
+   * 3. Supabase connection fails -> "I'm unable to access student records right now. Please try again."
    */
   public static async execute(ctx: FeeAgentContext): Promise<FeeAgentResult> {
     let periodLabel = 'Academic Year 2025-26';
@@ -56,17 +57,23 @@ export class FeeAgent {
     const targetStudentName = ctx.resolvedStudent?.name || ctx.targetStudent;
 
     if (ctx.scope === 'SOLO' || targetStudentName || targetStudentId) {
-      const studentMatch = await FeeService.getStudentFee(targetStudentId, targetStudentName);
+      const detailed: FeeQueryResult = await FeeService.getStudentFeeDetailed(targetStudentId, targetStudentName);
 
-      if (!studentMatch) {
+      if (detailed.status === 'CONNECTION_ERROR') {
         return {
-          text: targetStudentName
-            ? `No matching student records were found for "${targetStudentName}".`
-            : "No matching student records were found.",
+          text: "I'm unable to access student records right now. Please try again.",
           agent: 'FEE'
         };
       }
 
+      if (detailed.status === 'NOT_FOUND' || !detailed.record) {
+        return {
+          text: "I couldn't find a student matching that name.",
+          agent: 'FEE'
+        };
+      }
+
+      const studentMatch = detailed.record;
       const statusBadge = studentMatch.status === 'PAID' ? 'Fully Paid' : `Pending Due: ₹${studentMatch.dueAmount.toLocaleString('en-IN')}`;
       let text = `💳 **Fee Status for ${studentMatch.studentName} (${studentMatch.course})**\n\n` +
         `• **Roll / Student ID:** ${ctx.resolvedStudent?.rollNumber || studentMatch.studentId}\n` +
@@ -126,6 +133,20 @@ export class FeeAgent {
 
     // 2. AGGREGATE College / Department Query
     const aggregate = await FeeService.getAggregateFees(ctx.targetCourse);
+
+    if (aggregate.status === 'CONNECTION_ERROR') {
+      return {
+        text: "I'm unable to access student records right now. Please try again.",
+        agent: 'FEE'
+      };
+    }
+
+    if (aggregate.status === 'NOT_FOUND' || aggregate.records.length === 0) {
+      return {
+        text: "No fee records found for this cohort.",
+        agent: 'FEE'
+      };
+    }
 
     let text = `📊 **Fee Collection Summary [${periodLabel}]**\n\n` +
       `• **Total Invoiced:** ₹${aggregate.totalFee.toLocaleString('en-IN')}\n` +

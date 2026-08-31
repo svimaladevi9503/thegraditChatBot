@@ -1,5 +1,5 @@
 import { AttendanceRecord } from '../mockDatabase';
-import { AttendanceService } from '../../backend/services/attendanceService';
+import { AttendanceService, AttendanceQueryResult } from '../../backend/services/attendanceService';
 import { ExportDataPayload } from '../exportUtils';
 import { TimePeriodType, QueryScopeType, ExportFormatType } from './feeAgent';
 import { ResolvedStudent } from '../studentResolver';
@@ -37,9 +37,10 @@ export interface AttendanceAgentResult {
 
 export class AttendanceAgent {
   /**
-   * Core Attendance Calculation Pipeline:
-   * Faculty/User -> Orchestrator -> Student Resolver -> Attendance Agent -> Supabase DB (student_attendance_summary view)
-   * Formula: {time period} + {DB data} + {intent [.pdf / .xlsx / .docs / answer]}
+   * Attendance Calculation Pipeline:
+   * 1. Supabase returns data -> Show live data
+   * 2. Supabase returns no student -> "I couldn't find a student matching that name."
+   * 3. Supabase connection fails -> "I'm unable to access student records right now. Please try again."
    */
   public static async execute(ctx: AttendanceAgentContext): Promise<AttendanceAgentResult> {
     let periodLabel = 'Academic Year 2025-26';
@@ -51,22 +52,28 @@ export class AttendanceAgent {
       periodLabel = 'Academic Session 2025-26';
     }
 
-    // 1. SOLO Student Inquiries (via Student Resolver or Target Student Name)
+    // 1. SOLO Student Inquiries
     const targetStudentId = ctx.resolvedStudent?.id || (ctx.resolvedStudent as any)?.rollNumber;
     const targetStudentName = ctx.resolvedStudent?.name || ctx.targetStudent;
 
     if (ctx.scope === 'SOLO' || targetStudentName || targetStudentId) {
-      const record = await AttendanceService.getStudentAttendance(targetStudentId, targetStudentName);
+      const detailed: AttendanceQueryResult = await AttendanceService.getStudentAttendanceDetailed(targetStudentId, targetStudentName);
 
-      if (!record) {
+      if (detailed.status === 'CONNECTION_ERROR') {
         return {
-          text: targetStudentName
-            ? `No matching student records were found for "${targetStudentName}".`
-            : "No matching student records were found.",
+          text: "I'm unable to access student records right now. Please try again.",
           agent: 'ATTENDANCE'
         };
       }
 
+      if (detailed.status === 'NOT_FOUND' || !detailed.record) {
+        return {
+          text: "I couldn't find a student matching that name.",
+          agent: 'ATTENDANCE'
+        };
+      }
+
+      const record = detailed.record;
       const isEligible = record.attendancePct >= 75.0;
       const statusIcon = isEligible ? '✅' : '⚠️';
 
@@ -127,6 +134,20 @@ export class AttendanceAgent {
 
     // 2. AGGREGATE Class-Wise / Department / College Inquiries
     const aggregate = await AttendanceService.getAggregateAttendance(ctx.targetCourse);
+
+    if (aggregate.status === 'CONNECTION_ERROR') {
+      return {
+        text: "I'm unable to access student records right now. Please try again.",
+        agent: 'ATTENDANCE'
+      };
+    }
+
+    if (aggregate.status === 'NOT_FOUND' || aggregate.records.length === 0) {
+      return {
+        text: "No attendance records found for this cohort.",
+        agent: 'ATTENDANCE'
+      };
+    }
 
     let text = `📈 **Class-Wise & Aggregate Attendance Analysis [${periodLabel}]**\n\n` +
       `• **Overall Institutional Average:** **${aggregate.avgPercentage}%**\n` +

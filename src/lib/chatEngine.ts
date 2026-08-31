@@ -182,6 +182,14 @@ export class OrchestratorAgent {
     // Step 1: Student Resolver (Queries Supabase public.students)
     const detailedResolution = await StudentResolver.resolveDetailed(sanitized);
 
+    if (detailedResolution.status === 'CONNECTION_ERROR') {
+      return {
+        text: "I'm unable to access student records right now. Please try again.",
+        agent: 'ORCHESTRATOR',
+        confidenceTier: 'TIER_1_REGEX',
+      };
+    }
+
     // If multiple students match (Ambiguous Student State)
     if (detailedResolution.isAmbiguous && detailedResolution.multipleMatches && detailedResolution.multipleMatches.length > 1) {
       const name = detailedResolution.multipleMatches[0].name.split(' ')[0];
@@ -206,11 +214,11 @@ export class OrchestratorAgent {
     }
 
     const resolvedStudent = detailedResolution.resolvedStudent;
-    const candidates = StudentService.extractCandidates(sanitized);
+    const candidates = StudentService.extractCandidates(rawInput);
     
-    // Check if query is looking for a specific individual
-    const isExplicitSolo = /['’]s|\bfor\b|\bof\b|\bstudent\b/i.test(sanitized);
-    const targetStudent = resolvedStudent ? resolvedStudent.name : isExplicitSolo && candidates.length > 0 ? candidates[0] : undefined;
+    // Check if query is looking for a specific individual (has name candidates or explicit solo keywords)
+    const isExplicitSolo = /['’]s|\bfor\b|\bof\b|\bstudent\b/i.test(rawInput) || /\b(my|i|me|mine)\b/i.test(sanitized) || candidates.length > 0;
+    const targetStudent = resolvedStudent ? resolvedStudent.name : candidates.length > 0 ? candidates.join(' ') : undefined;
 
     // Step 2: Extract Modifiers
     const format = this.extractFormat(sanitized);
