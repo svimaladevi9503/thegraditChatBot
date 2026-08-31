@@ -58,3 +58,6 @@ export const AgentBadge: React.FC<AgentBadgeProps> = ({ agent, confidenceTier })
     </div>
   );
 };
+
+export default AgentBadge;
+

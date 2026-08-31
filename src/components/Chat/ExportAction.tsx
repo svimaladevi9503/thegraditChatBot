@@ -86,3 +86,6 @@ export const ExportAction: React.FC<ExportActionProps> = ({ payload, format = 'P
     </div>
   );
 };
+
+export default ExportAction;
+
