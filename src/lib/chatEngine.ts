@@ -182,6 +182,16 @@ export class OrchestratorAgent {
     const hasStudent = this.hasExplicitStudentReference(sanitized, candidates);
     const intent = this.classifyIntent(sanitized, candidates);
 
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('====================================');
+      console.log('[CHAT PIPELINE TRACE]');
+      console.log('Query:', sanitized);
+      console.log('Intent:', intent);
+      console.log('Candidates:', candidates.length > 0 ? candidates.join(', ') : 'NONE');
+      console.log('Student Resolver Target:', hasStudent || candidates.length > 0 ? 'CALLED' : 'BYPASSED');
+      console.log('====================================');
+    }
+
     // =========================================================================
     // 🔴 ROUTING PRIORITY 1 — COLLECTIVE QUERIES (Bypasses StudentResolver)
     // =========================================================================

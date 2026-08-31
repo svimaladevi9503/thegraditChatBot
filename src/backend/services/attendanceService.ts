@@ -106,7 +106,7 @@ export class AttendanceService {
     try {
       let query = client.from('student_attendance_summary').select('*');
       if (studentId) {
-        query = query.eq('student_id', studentId);
+        query = query.ilike('student_id', studentId);
       } else if (studentName) {
         const first = studentName.split(' ')[0];
         query = query.or(`first_name.ilike.%${first}%,last_name.ilike.%${first}%,student_id.ilike.%${studentName}%`);
