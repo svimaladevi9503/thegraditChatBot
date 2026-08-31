@@ -34,16 +34,19 @@ const STOP_WORDS = new Set([
   'attendance', 'fee', 'fees', 'pending', 'due', 'dues', 'paid', 'total', 'my', 'student', 'students',
   'pdf', 'excel', 'xlsx', 'docx', 'doc', 'download', 'export', 'current', 'sem', 'as',
   'semester', 'year', '2024', '2025', '2026', '2027', '2025-26', '2024-25', 'odd', 'even', 'how', 'much', 'many',
-  'overall', 'collection', 'summary', 'all', 'college', 'class', 'wise', 'list', 'more', 'named', 'about',
+  'overall', 'collection', 'collected', 'summary', 'all', 'college', 'class', 'wise', 'list', 'more', 'named', 'about',
   'please', 'can', 'you', 'give', 'info', 'information', 'view', 'do', 'who', 'eligible', 'eligibility',
   'exam', 'exams', 'below', 'above', 'shortage', 'audit', 'help', 'commands', 'hello', 'hi', 'hey', 'greetings',
-  'are', 'was', 'were', 'have', 'has', 'had', 'been', 'with', 'by', 'from'
+  'are', 'was', 'were', 'have', 'has', 'had', 'been', 'with', 'by', 'from', 'classes', 'attended', 'bunk',
+  'percentage', 'defaulter', 'defaulters', 'unpaid', 'outstanding', 'statement', 'invoice', 'receipt',
+  'tuition', 'installment', 'scholarship', 'payment', 'payments', 'balance', 'vs'
 ]);
 
 // Lightweight defensive candidate extraction regex patterns
 const ROLL_NUMBER_REGEX = /\b(?:\d{4}[A-Z]{2,4}\d{2,4}|ST-?\d+|[A-Z]{2,4}\d{3,6}|\d{2,4}[A-Z]{2,4}\d*)\b/gi;
+const POSSESSIVE_REGEX = /\b([A-Z][a-z]{1,}|[a-z]{3,})['’]s\b/gi;
 const TWO_WORD_NAME_REGEX = /\b([A-Z][a-z]{2,}\s+[A-Z][a-z]{2,})\b/g;
-const CONTEXTUAL_NAME_REGEX = /(?:student|for|of|about|check|show|named)\s+([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})?)/g;
+const CONTEXTUAL_NAME_REGEX = /(?:student|for|of|about|named)\s+([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})?)/gi;
 
 export class StudentService {
   /**
@@ -70,34 +73,39 @@ export class StudentService {
       rollMatches.forEach(m => addCandidate(m));
     }
 
-    // 2. Full Two-Word Names (e.g. "Rahul Sharma")
+    // 2. Possessive Student Names (e.g. "Rahul's attendance", "Sharma's pending fee")
+    let possMatch;
+    while ((possMatch = POSSESSIVE_REGEX.exec(query)) !== null) {
+      if (possMatch[1]) addCandidate(possMatch[1]);
+    }
+
+    // 3. Full Two-Word Names (e.g. "Rahul Sharma")
     let twoWordMatch;
     while ((twoWordMatch = TWO_WORD_NAME_REGEX.exec(query)) !== null) {
       if (twoWordMatch[1]) addCandidate(twoWordMatch[1]);
     }
 
-    // 3. Contextual Names (e.g. "attendance of Rahul", "fee for Priya")
+    // 4. Contextual Preposition Names (e.g. "attendance of Rahul", "fee for Priya", "student Rahul")
     let contextMatch;
     while ((contextMatch = CONTEXTUAL_NAME_REGEX.exec(query)) !== null) {
       if (contextMatch[1]) addCandidate(contextMatch[1]);
     }
 
-    // 4. Token & Word Analysis (Stripping possessives 's / ’s)
-    const clean = query
-      .replace(/['’]s\b/gi, '')
-      .replace(/[<>"`\\]/g, ' ')
-      .replace(/[^\w\s-]/gi, ' ')
-      .trim();
+    // 5. Token & Word Analysis (Only when no explicit candidate was found above)
+    if (candidates.length === 0) {
+      const clean = query
+        .replace(/['’]s\b/gi, '')
+        .replace(/[<>"`\\]/g, ' ')
+        .replace(/[^\w\s-]/gi, ' ')
+        .trim();
 
-    const words = clean.split(/\s+/).filter(w => w.length >= 2);
+      const words = clean.split(/\s+/).filter(w => w.length >= 3);
 
-    for (const w of words) {
-      const lower = w.toLowerCase();
-      if (/^\d{2,4}$/.test(w)) continue;
-      if (!STOP_WORDS.has(lower)) {
-        addCandidate(w);
-        if (w.length > 3 && (w.endsWith('s') || w.endsWith('S'))) {
-          addCandidate(w.slice(0, -1));
+      for (const w of words) {
+        const lower = w.toLowerCase();
+        if (/^\d{2,4}$/.test(w)) continue;
+        if (!STOP_WORDS.has(lower)) {
+          addCandidate(w);
         }
       }
     }
