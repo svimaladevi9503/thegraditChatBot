@@ -1,84 +1,115 @@
-import { StudentService, StudentResolutionResult, QueryStatus } from '../backend/services/studentService';
-import { Student } from './mockDatabase';
+import { StudentService, StudentEntity } from '../backend/services/studentService';
+
+export interface StudentMatchItem {
+  id: string;
+  student_id: string;
+  first_name: string;
+  last_name: string;
+  department?: string;
+  class?: string;
+}
 
 export interface ResolvedStudent {
   id: string;
   name: string;
   rollNumber: string;
-  course: string;
-  semester: string;
-  academicYear: string;
-  confidence: number;
+  course?: string;
+  semester?: string;
+  academicYear?: string;
+  confidence?: number;
 }
 
-export interface DetailedResolverOutput {
-  status: QueryStatus;
-  resolvedStudent: ResolvedStudent | null;
-  multipleMatches?: Student[];
-  totalMatchesCount?: number;
-  candidateSearched?: string;
-  isAmbiguous?: boolean;
+export interface StudentResolutionContract {
+  status: 'RESOLVED' | 'AMBIGUOUS' | 'NOT_FOUND' | 'CONNECTION_ERROR';
+  searchTerm: string;
+  student?: {
+    id: string;
+    student_id: string;
+    first_name: string;
+    last_name: string;
+    department?: string;
+    class?: string;
+  };
+  matches?: StudentMatchItem[];
+  totalMatches?: number;
+  remainingMatches?: number;
   errorMessage?: string;
 }
 
 export class StudentResolver {
   /**
-   * Detailed resolution supporting regex matching, Top 3 ambiguous suggestions, and show more
+   * Evaluates student resolution with deterministic hierarchy and ambiguity safety
    */
-  public static async resolveDetailed(query: string): Promise<DetailedResolverOutput> {
-    if (!query) return { status: 'NOT_FOUND', resolvedStudent: null };
-    const res: StudentResolutionResult = await StudentService.findStudentDetailed(query);
-    
-    if (res.status === 'CONNECTION_ERROR') {
-      return {
-        status: 'CONNECTION_ERROR',
-        resolvedStudent: null,
-        errorMessage: res.errorMessage || "⚠️ Unable to access student records right now. Please try again in a moment.",
-      };
+  public static async resolve(query: string): Promise<StudentResolutionContract> {
+    if (!query || typeof query !== 'string') {
+      return { status: 'NOT_FOUND', searchTerm: '' };
     }
 
-    if (res.isAmbiguous && res.multipleMatches) {
-      return {
-        status: 'SUCCESS',
-        resolvedStudent: null,
-        multipleMatches: res.multipleMatches,
-        totalMatchesCount: res.totalMatchesCount,
-        candidateSearched: res.candidateSearched,
-        isAmbiguous: true,
-      };
+    // Step 1: Candidate Extraction (Regex / Tokens only extract candidates, never decides student)
+    const candidates = StudentService.extractCandidates(query);
+
+    if (candidates.length === 0) {
+      return { status: 'NOT_FOUND', searchTerm: '' };
     }
 
-    if (!res.student || res.status === 'NOT_FOUND') {
-      return { status: 'NOT_FOUND', resolvedStudent: null };
+    // Step 2: Database Search across Candidates using Deterministic Hierarchy
+    for (const cand of candidates) {
+      const searchResult = await StudentService.searchStudents(cand);
+
+      if (searchResult.status === 'CONNECTION_ERROR') {
+        return {
+          status: 'CONNECTION_ERROR',
+          searchTerm: cand,
+          errorMessage: '⚠️ Unable to access student records right now. Please try again in a moment.',
+        };
+      }
+
+      if (searchResult.status === 'SUCCESS' && searchResult.matches.length > 0) {
+        const matches = searchResult.matches;
+
+        // Exactly ONE student matches uniquely
+        if (matches.length === 1) {
+          const s = matches[0];
+          return {
+            status: 'RESOLVED',
+            searchTerm: cand,
+            student: {
+              id: s.id,
+              student_id: s.student_id,
+              first_name: s.first_name,
+              last_name: s.last_name,
+              department: s.department,
+              class: s.class,
+            },
+            totalMatches: 1,
+            remainingMatches: 0,
+          };
+        }
+
+        // Multiple students match -> NEVER select automatically, return AMBIGUOUS
+        const mappedMatches: StudentMatchItem[] = matches.map(m => ({
+          id: m.id,
+          student_id: m.student_id,
+          first_name: m.first_name,
+          last_name: m.last_name,
+          department: m.department,
+          class: m.class,
+        }));
+
+        return {
+          status: 'AMBIGUOUS',
+          searchTerm: cand,
+          matches: mappedMatches,
+          totalMatches: mappedMatches.length,
+          remainingMatches: Math.max(0, mappedMatches.length - 3),
+        };
+      }
     }
 
+    // No candidates matched any student record
     return {
-      status: 'SUCCESS',
-      resolvedStudent: {
-        id: res.student.id,
-        name: res.student.name,
-        rollNumber: res.student.rollNumber,
-        course: res.student.course,
-        semester: res.student.semester,
-        academicYear: res.student.academicYear,
-        confidence: 0.95,
-      },
+      status: 'NOT_FOUND',
+      searchTerm: candidates[0] || query,
     };
-  }
-
-  /**
-   * Asynchronously resolves student entities from Supabase public.students
-   */
-  public static async resolveAsync(query: string): Promise<ResolvedStudent | null> {
-    const res = await this.resolveDetailed(query);
-    return res.resolvedStudent;
-  }
-
-  /**
-   * Synchronous resolver fallback
-   */
-  public static resolve(query: string): ResolvedStudent | null {
-    if (!query) return null;
-    return null;
   }
 }

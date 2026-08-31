@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { ArrowRight } from 'lucide-react';
+import { ArrowRight, User, PlusCircle } from 'lucide-react';
 import { ChatMessageResponse } from '../../lib/chatEngine';
 import { AgentBadge } from './AgentBadge';
 import { ExportAction } from './ExportAction';
@@ -34,8 +34,9 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onQuickAction
         {/* Resolved Student Entity Pill */}
         {!isUser && message.response?.resolvedStudent && (
           <div className="mb-2 px-2.5 py-1 bg-purple-50/90 border border-purple-200/70 rounded-lg text-[11px] text-purple-900 font-medium flex items-center justify-between gap-2">
-            <span className="truncate">
-              🎯 <strong>{message.response.resolvedStudent.name}</strong>
+            <span className="truncate flex items-center gap-1.5">
+              <User className="w-3 h-3 text-purple-600" />
+              <strong>{message.response.resolvedStudent.name}</strong>
             </span>
             <span className="text-[10px] text-purple-600 font-mono shrink-0 font-bold">
               {message.response.resolvedStudent.rollNumber}
@@ -75,19 +76,31 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, onQuickAction
         {message.timestamp}
       </span>
 
-      {/* Quick Action Chips attached to response */}
+      {/* Quick Action Suggestion Chips */}
       {!isUser && message.response?.quickActions && message.response.quickActions.length > 0 && onQuickAction && (
         <div className="mt-1 flex flex-wrap gap-1.5 max-w-[90%]">
-          {message.response.quickActions.map((action, idx) => (
-            <button
-              key={idx}
-              onClick={() => onQuickAction(action.query)}
-              className="inline-flex items-center gap-1 px-2.5 py-1 bg-white hover:bg-purple-50 text-gray-700 hover:text-purple-700 rounded-lg text-[11px] font-medium border border-gray-200/80 shadow-2xs transition-all active:scale-95"
-            >
-              <span>{action.label}</span>
-              <ArrowRight className="w-2.5 h-2.5 opacity-60" />
-            </button>
-          ))}
+          {message.response.quickActions.map((action, idx) => {
+            const isShowMore = action.label.toLowerCase().includes('show more');
+            return (
+              <button
+                key={idx}
+                onClick={() => onQuickAction(action.query)}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-medium border shadow-2xs transition-all active:scale-95 cursor-pointer ${
+                  isShowMore
+                    ? 'bg-purple-50 hover:bg-purple-100 text-purple-700 border-purple-200'
+                    : 'bg-white hover:bg-purple-50/70 text-gray-700 hover:text-purple-700 border-[#E8EEF5]'
+                }`}
+              >
+                {isShowMore ? (
+                  <PlusCircle className="w-3 h-3 text-purple-600" />
+                ) : (
+                  <User className="w-3 h-3 text-gray-400" />
+                )}
+                <span>{action.label}</span>
+                <ArrowRight className="w-2.5 h-2.5 opacity-50" />
+              </button>
+            );
+          })}
         </div>
       )}
     </div>

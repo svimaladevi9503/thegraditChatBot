@@ -1,8 +1,7 @@
-import { StudentResolver, ResolvedStudent } from './studentResolver';
+import { StudentResolver, StudentResolutionContract, StudentMatchItem } from './studentResolver';
 import { AttendanceAgent, AttendanceAgentResult } from './agents/attendanceAgent';
 import { FeeAgent, FeeAgentResult, TimePeriodType, QueryScopeType, ExportFormatType } from './agents/feeAgent';
 import { StudentService } from '../backend/services/studentService';
-import { Student } from './mockDatabase';
 
 export type AgentType = 'ATTENDANCE' | 'FEE' | 'MISC' | 'ORCHESTRATOR' | 'UNKNOWN';
 
@@ -10,7 +9,13 @@ export interface ChatMessageResponse {
   text: string;
   agent: AgentType;
   confidenceTier: 'TIER_1_REGEX' | 'TIER_2_FUZZY' | 'TIER_3_FALLBACK';
-  resolvedStudent?: ResolvedStudent;
+  resolvedStudent?: {
+    id: string;
+    name: string;
+    rollNumber: string;
+    department?: string;
+    class?: string;
+  };
   exportPayload?: any;
   exportFormat?: ExportFormatType;
   quickActions?: { label: string; query: string }[];
@@ -21,7 +26,7 @@ export interface ChatMessageResponse {
 const ATTENDANCE_KEYWORDS = /\b(attendance|present|absent|shortage|classes|attended|bunk|eligibility|percentage|lectures|sessions)\b/i;
 const FEE_KEYWORDS = /\b(fee|fees|paid|due|dues|balance|pending|receipt|tuition|installment|scholarship|payment|statement|invoice)\b/i;
 const MISC_KEYWORDS = /\b(help|what can you do|commands|options|hello|hi|hey|greetings|clear|who are you|reset)\b/i;
-const LIST_ALL_REGEX = /\b(list all|show all|show more|all students|more for)\b/i;
+const SHOW_MORE_REGEX = /\b(show more|list all|all .* students|show all .* students|more for)\b/i;
 
 // 2. TIME PERIOD REGEX PATTERNS
 const PERIOD_PATTERNS: Record<TimePeriodType, RegExp> = {
@@ -61,7 +66,7 @@ const COURSE_PATTERNS: Record<string, RegExp> = {
 
 export class OrchestratorAgent {
   /**
-   * Sanitizes input to prevent regex injection or malicious payload execution
+   * Sanitizes input to prevent injection
    */
   public static sanitizeInput(input: string): string {
     if (!input || typeof input !== 'string') return '';
@@ -72,9 +77,6 @@ export class OrchestratorAgent {
       .replace(/\s+/g, ' ');
   }
 
-  /**
-   * Extracts target time period
-   */
   private static extractPeriod(query: string): TimePeriodType {
     for (const [period, regex] of Object.entries(PERIOD_PATTERNS) as [TimePeriodType, RegExp][]) {
       if (regex.test(query)) {
@@ -84,19 +86,12 @@ export class OrchestratorAgent {
     return 'CURRENT_SEM';
   }
 
-  /**
-   * Extracts query scope (SOLO, AGGREGATE, OVERDUE)
-   */
   private static extractScope(query: string, hasResolvedStudent: boolean): QueryScopeType {
     if (SCOPE_REGEX.OVERDUE.test(query)) return 'OVERDUE';
     if (SCOPE_REGEX.AGGREGATE.test(query) && !hasResolvedStudent) return 'AGGREGATE';
-    if (hasResolvedStudent) return 'SOLO';
     return 'SOLO';
   }
 
-  /**
-   * Extracts export format
-   */
   private static extractFormat(query: string): ExportFormatType {
     if (EXPORT_REGEX.PDF.test(query)) return 'PDF';
     if (EXPORT_REGEX.XLSX.test(query)) return 'XLSX';
@@ -104,9 +99,6 @@ export class OrchestratorAgent {
     return 'NONE';
   }
 
-  /**
-   * Extracts targeted course or department
-   */
   private static extractCourse(query: string): string | undefined {
     for (const [courseName, regex] of Object.entries(COURSE_PATTERNS)) {
       if (regex.test(query)) {
@@ -116,9 +108,6 @@ export class OrchestratorAgent {
     return undefined;
   }
 
-  /**
-   * Tier 2: Fuzzy keyword and intent matching
-   */
   private static async matchIntentTier2(query: string): Promise<{ agent: AgentType; confidence: number } | null> {
     const clean = query.toLowerCase();
 
@@ -149,72 +138,84 @@ export class OrchestratorAgent {
       };
     }
 
-    // Step 1: Student Resolver (Queries Supabase public.students with Regex & Token Matching)
-    const detailedResolution = await StudentResolver.resolveDetailed(sanitized);
+    // Step 1: Detect Intent
+    const isAttendanceIntent = ATTENDANCE_KEYWORDS.test(sanitized);
+    const isFeeIntent = FEE_KEYWORDS.test(sanitized);
+    const intentSuffix = isAttendanceIntent ? 'attendance' : isFeeIntent ? 'pending fee' : 'details';
 
-    if (detailedResolution.status === 'CONNECTION_ERROR') {
+    // Step 2: Student Resolution via Deterministic Hierarchy
+    const resolution: StudentResolutionContract = await StudentResolver.resolve(sanitized);
+
+    // Case A: CONNECTION_ERROR
+    if (resolution.status === 'CONNECTION_ERROR') {
       return {
         text: "⚠️ Unable to access student records right now. Please try again in a moment.",
         agent: 'ORCHESTRATOR',
         confidenceTier: 'TIER_1_REGEX',
+        error: true,
       };
     }
 
-    // Handle "Show all / List all" for first/last name searches
-    const isListAllQuery = LIST_ALL_REGEX.test(sanitized);
+    // Case B: AMBIGUOUS (Multiple Students Match -> NEVER Select Automatically)
+    if (resolution.status === 'AMBIGUOUS' && resolution.matches && resolution.matches.length > 1) {
+      const allMatches = resolution.matches;
+      const searchTerm = resolution.searchTerm;
+      const isShowMore = SHOW_MORE_REGEX.test(sanitized);
 
-    // If multiple students match (Ambiguous First/Last Name Search with Top 3 Suggestions & Show More)
-    if (detailedResolution.isAmbiguous && detailedResolution.multipleMatches && detailedResolution.multipleMatches.length > 1) {
-      const allMatches = detailedResolution.multipleMatches;
-      const candidateName = detailedResolution.candidateSearched || allMatches[0].name.split(' ')[0];
-      const intentSuffix = ATTENDANCE_KEYWORDS.test(sanitized) ? 'attendance' : FEE_KEYWORDS.test(sanitized) ? 'fee' : 'details';
+      // If user clicked "Show More" / "Show all {name} students", render remaining (matches 4 onwards)
+      if (isShowMore && allMatches.length > 3) {
+        const remainingList = allMatches.slice(3);
+        let remText = `🔍 **Remaining ${remainingList.length} students matching "${searchTerm}":**\n\n`;
+        const remQuickActions: { label: string; query: string }[] = [];
 
-      // If user specifically requested to view all matching records
-      if (isListAllQuery) {
-        let fullListText = `📋 **All ${allMatches.length} students matching "${candidateName}":**\n\n`;
-        const fullQuickActions: { label: string; query: string }[] = [];
-
-        allMatches.forEach((st, idx) => {
-          fullListText += `${idx + 1}. **${st.name}** — \`${st.rollNumber}\` (${st.course})\n`;
-          fullQuickActions.push({
-            label: `${st.name} (${st.rollNumber})`,
-            query: `Show ${st.rollNumber} ${intentSuffix}`,
+        remainingList.forEach((st, idx) => {
+          const dept = st.department || st.class || 'Student';
+          remText += `${idx + 4}. **${st.first_name} ${st.last_name}** — \`${st.student_id}\` (${dept})\n`;
+          remQuickActions.push({
+            label: `${st.first_name} ${st.last_name} · ${st.student_id}`,
+            query: `Show ${st.student_id} ${intentSuffix}`,
           });
         });
 
+        remText += `\nPlease select the student you mean.`;
+
         return {
-          text: fullListText,
+          text: remText,
           agent: 'ORCHESTRATOR',
           confidenceTier: 'TIER_1_REGEX',
-          quickActions: fullQuickActions,
+          quickActions: remQuickActions,
         };
       }
 
-      // Default Top 3 Suggestions view
+      // Default First Ambiguous Response: Top 3 Matches + Show More Button
       const top3 = allMatches.slice(0, 3);
       const remainingCount = allMatches.length - top3.length;
 
-      let ambText = `🔍 I found **${allMatches.length} students** matching "**${candidateName}**".\n\n` +
-        `**Top 3 Suggested Matches:**\n`;
+      let ambText = `🔍 I found **${allMatches.length} students** matching "**${searchTerm}**".\n\n` +
+        `**Top matches:**\n`;
 
       const quickActions: { label: string; query: string }[] = [];
 
       top3.forEach((st, idx) => {
-        ambText += `${idx + 1}. **${st.name}** — \`${st.rollNumber}\` (${st.course})\n`;
+        const dept = st.department || st.class || 'Student';
+        ambText += `${idx + 1}. **${st.first_name} ${st.last_name}** — \`${st.student_id}\` (${dept})\n`;
         quickActions.push({
-          label: `${st.name} (${st.rollNumber})`,
-          query: `Show ${st.rollNumber} ${intentSuffix}`,
+          label: `${st.first_name} ${st.last_name} · ${st.student_id}`,
+          query: `Show ${st.student_id} ${intentSuffix}`,
         });
       });
 
+      ambText += `\nPlease select the student you mean.`;
+
       if (remainingCount > 0) {
-        ambText += `\n*...and ${remainingCount} more students found for "${candidateName}".*\nClick below to expand all:`;
+        ambText += `\n\n*...and ${remainingCount} more students found.*`;
         quickActions.push({
-          label: `🔍 Show more (${remainingCount} more for "${candidateName}")`,
-          query: `List all students named ${candidateName}`,
+          label: `Show more · ${remainingCount} more`,
+          query: `Show all ${searchTerm} students ${intentSuffix}`,
         });
       }
 
+      // Hard safety check: Ambiguous result NEVER reaches AttendanceAgent or FeeAgent
       return {
         text: ambText,
         agent: 'ORCHESTRATOR',
@@ -223,52 +224,74 @@ export class OrchestratorAgent {
       };
     }
 
-    const resolvedStudent = detailedResolution.resolvedStudent;
+    // Step 3: Check Candidate Presence for Solo vs Aggregate Scoping
     const candidates = StudentService.extractCandidates(rawInput);
-    
-    // Check if query is looking for a specific individual (has name candidates or explicit solo keywords)
     const isExplicitSolo = /['’]s|\bfor\b|\bof\b|\bstudent\b/i.test(rawInput) || /\b(my|i|me|mine)\b/i.test(sanitized) || candidates.length > 0;
-    const targetStudent = resolvedStudent ? resolvedStudent.name : candidates.length > 0 ? candidates.join(' ') : undefined;
+    
+    // Case C: NOT_FOUND for an individual student search
+    if (resolution.status === 'NOT_FOUND' && isExplicitSolo && !SCOPE_REGEX.AGGREGATE.test(sanitized)) {
+      return {
+        text: "I couldn't find a student matching that name.",
+        agent: isAttendanceIntent ? 'ATTENDANCE' : isFeeIntent ? 'FEE' : 'ORCHESTRATOR',
+        confidenceTier: 'TIER_1_REGEX',
+      };
+    }
 
-    // Step 2: Extract Modifiers
+    // Case D: RESOLVED Single Student
+    const resolvedStudent = resolution.status === 'RESOLVED' && resolution.student ? {
+      id: resolution.student.id,
+      name: `${resolution.student.first_name} ${resolution.student.last_name}`.trim(),
+      rollNumber: resolution.student.student_id,
+      department: resolution.student.department,
+      class: resolution.student.class,
+    } : undefined;
+
+    // Step 4: Extract Modifiers
     const format = this.extractFormat(sanitized);
     const period = this.extractPeriod(sanitized);
-    const scope = this.extractScope(sanitized, Boolean(resolvedStudent || targetStudent));
+    const scope = this.extractScope(sanitized, Boolean(resolvedStudent));
     const targetCourse = this.extractCourse(sanitized);
 
-    // Step 3: Tier 1 Regex Matching
+    // Step 5: Route to Target Agent
     let targetAgent: AgentType = 'UNKNOWN';
     let confidenceTier: 'TIER_1_REGEX' | 'TIER_2_FUZZY' | 'TIER_3_FALLBACK' = 'TIER_1_REGEX';
 
-    if (ATTENDANCE_KEYWORDS.test(sanitized)) {
+    if (isAttendanceIntent) {
       targetAgent = 'ATTENDANCE';
-    } else if (FEE_KEYWORDS.test(sanitized)) {
+    } else if (isFeeIntent) {
       targetAgent = 'FEE';
     } else if (MISC_KEYWORDS.test(sanitized)) {
       targetAgent = 'MISC';
     }
 
-    // Step 4: Tier 2 Fuzzy Matching
     if (targetAgent === 'UNKNOWN') {
       const fuzzyMatch = await this.matchIntentTier2(sanitized);
       if (fuzzyMatch) {
         targetAgent = fuzzyMatch.agent;
         confidenceTier = 'TIER_2_FUZZY';
-      } else if (resolvedStudent || targetStudent) {
+      } else if (resolvedStudent) {
         targetAgent = 'ATTENDANCE';
         confidenceTier = 'TIER_1_REGEX';
       }
     }
 
-    // Step 5: Delegate to Specialized Sub-Agents
+    // Step 6: Delegate to Sub-Agents (Only with Resolved Student or Valid Aggregate Query)
     try {
       if (targetAgent === 'ATTENDANCE') {
         const result: AttendanceAgentResult = await AttendanceAgent.execute({
           userId,
           period,
           scope,
-          resolvedStudent,
-          targetStudent,
+          resolvedStudent: resolvedStudent ? {
+            id: resolvedStudent.id,
+            name: resolvedStudent.name,
+            rollNumber: resolvedStudent.rollNumber,
+            course: resolvedStudent.class || resolvedStudent.department || 'Course',
+            semester: 'Odd Sem',
+            academicYear: '2025-26',
+            confidence: 1.0,
+          } : null,
+          targetStudent: resolvedStudent?.name,
           targetCourse,
           format,
           rawQuery: sanitized
@@ -278,7 +301,7 @@ export class OrchestratorAgent {
           text: result.text,
           agent: 'ATTENDANCE',
           confidenceTier,
-          resolvedStudent: resolvedStudent || undefined,
+          resolvedStudent,
           exportPayload: result.exportPayload,
           exportFormat: result.exportFormat
         };
@@ -289,8 +312,16 @@ export class OrchestratorAgent {
           userId,
           period,
           scope,
-          resolvedStudent,
-          targetStudent,
+          resolvedStudent: resolvedStudent ? {
+            id: resolvedStudent.id,
+            name: resolvedStudent.name,
+            rollNumber: resolvedStudent.rollNumber,
+            course: resolvedStudent.class || resolvedStudent.department || 'Course',
+            semester: 'Odd Sem',
+            academicYear: '2025-26',
+            confidence: 1.0,
+          } : null,
+          targetStudent: resolvedStudent?.name,
           targetCourse,
           format,
           rawQuery: sanitized
@@ -300,7 +331,7 @@ export class OrchestratorAgent {
           text: result.text,
           agent: 'FEE',
           confidenceTier,
-          resolvedStudent: resolvedStudent || undefined,
+          resolvedStudent,
           exportPayload: result.exportPayload,
           exportFormat: result.exportFormat
         };
