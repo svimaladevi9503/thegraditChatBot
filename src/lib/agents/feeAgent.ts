@@ -1,5 +1,4 @@
-import { FeeRecord } from '../mockDatabase';
-import { FeeService, FeeQueryResult } from '../../backend/services/feeService';
+import { FeeService, FeeQueryResult, FeeRecordItem } from '../../backend/services/feeService';
 import { ExportDataPayload } from '../exportUtils';
 import { ResolvedStudent } from '../studentResolver';
 
@@ -40,9 +39,9 @@ export interface FeeAgentResult {
 export class FeeAgent {
   /**
    * Fee Calculation Pipeline:
-   * 1. Supabase returns data -> Show live data
+   * 1. Supabase returns data -> Show verified live data (no fabricated fields)
    * 2. Supabase returns no student -> "I couldn't find a student matching that name."
-   * 3. Supabase connection fails -> "I'm unable to access student records right now. Please try again."
+   * 3. Supabase connection fails -> "⚠️ Unable to access student records right now. Please try again in a moment."
    */
   public static async execute(ctx: FeeAgentContext): Promise<FeeAgentResult> {
     let periodLabel = 'Academic Year 2025-26';
@@ -53,7 +52,7 @@ export class FeeAgent {
     }
 
     // 1. SOLO Student Query
-    const targetStudentId = ctx.resolvedStudent?.id || (ctx.resolvedStudent as any)?.rollNumber;
+    const targetStudentId = ctx.resolvedStudent?.id || ctx.resolvedStudent?.rollNumber;
     const targetStudentName = ctx.resolvedStudent?.name || ctx.targetStudent;
 
     if (ctx.scope === 'SOLO' || targetStudentName || targetStudentId) {
@@ -61,7 +60,7 @@ export class FeeAgent {
 
       if (detailed.status === 'CONNECTION_ERROR') {
         return {
-          text: "I'm unable to access student records right now. Please try again.",
+          text: "⚠️ Unable to access student records right now. Please try again in a moment.",
           agent: 'FEE'
         };
       }
@@ -73,39 +72,43 @@ export class FeeAgent {
         };
       }
 
-      const studentMatch = detailed.record;
-      const statusBadge = studentMatch.status === 'PAID' ? 'Fully Paid' : `Pending Due: ₹${studentMatch.dueAmount.toLocaleString('en-IN')}`;
-      let text = `💳 **Fee Status for ${studentMatch.studentName} (${studentMatch.course})**\n\n` +
-        `• **Roll / Student ID:** ${ctx.resolvedStudent?.rollNumber || studentMatch.studentId}\n` +
-        `• **Academic Period:** ${periodLabel}\n` +
-        `• **Total Course Fee:** ₹${studentMatch.totalFee.toLocaleString('en-IN')}\n` +
+      const studentMatch: FeeRecordItem = detailed.record;
+      const statusBadge = studentMatch.dueAmount === 0 ? 'Fully Paid' : `Pending Due: ₹${studentMatch.dueAmount.toLocaleString('en-IN')}`;
+      
+      let text = `💳 **Fee Status for ${studentMatch.studentName}**\n\n` +
+        `• **Student ID / Roll:** ${studentMatch.studentId}\n` +
+        `• **Department:** ${studentMatch.departmentName || studentMatch.departmentCode || 'Not Specified'}\n` +
+        `• **Class:** ${studentMatch.className || 'Class Group'}${studentMatch.section ? ` (Sec ${studentMatch.section})` : ''}\n` +
+        `• **Fee Type:** ${studentMatch.feeType || 'Tuition Fee'}\n` +
+        `• **Academic Period:** ${studentMatch.semester} (${studentMatch.academicYear})\n` +
+        `• **Total Fee:** ₹${studentMatch.totalFee.toLocaleString('en-IN')}\n` +
         `• **Paid Amount:** ₹${studentMatch.paidAmount.toLocaleString('en-IN')}\n` +
-        `• **Due Balance:** ₹${studentMatch.dueAmount.toLocaleString('en-IN')}\n` +
-        `• **Payment Status:** ${statusBadge}\n` +
+        `• **Pending Due:** ₹${studentMatch.dueAmount.toLocaleString('en-IN')}\n` +
+        `• **Status:** ${statusBadge}\n` +
         `• **Due Date:** ${studentMatch.dueDate}\n`;
 
       if (studentMatch.dueAmount > 0) {
-        text += `\n⚠️ *Please clear pending dues prior to semester exam clearance.*`;
+        text += `\n⚠️ *Please clear outstanding balance prior to semester examination clearance.*`;
       } else {
-        text += `\n✅ *All dues cleared. Eligible for hall ticket generation.*`;
+        text += `\n✅ *All dues cleared. Eligible for semester hall ticket generation.*`;
       }
 
       let exportPayload: ExportDataPayload | undefined;
       if (ctx.format !== 'NONE') {
         exportPayload = {
           title: `Fee Statement - ${studentMatch.studentName}`,
-          subtitle: `Roll: ${ctx.resolvedStudent?.rollNumber || studentMatch.studentId} | Course: ${studentMatch.course}`,
+          subtitle: `Roll: ${studentMatch.studentId} | Department: ${studentMatch.departmentName || 'N/A'}`,
           generatedDate: new Date().toLocaleDateString('en-US', { dateStyle: 'long' }),
           summaryStats: [
             { label: 'Total Fee', value: `₹${studentMatch.totalFee.toLocaleString('en-IN')}` },
             { label: 'Paid', value: `₹${studentMatch.paidAmount.toLocaleString('en-IN')}` },
             { label: 'Due', value: `₹${studentMatch.dueAmount.toLocaleString('en-IN')}` },
           ],
-          headers: ['Student Name', 'Course', 'Semester', 'Total (₹)', 'Paid (₹)', 'Due (₹)', 'Status', 'Due Date'],
+          headers: ['Student Name', 'Student ID', 'Fee Type', 'Total (₹)', 'Paid (₹)', 'Due (₹)', 'Status', 'Due Date'],
           rows: [[
             studentMatch.studentName,
-            studentMatch.course,
-            studentMatch.semester,
+            studentMatch.studentId,
+            studentMatch.feeType || 'Tuition',
             studentMatch.totalFee.toLocaleString('en-IN'),
             studentMatch.paidAmount.toLocaleString('en-IN'),
             studentMatch.dueAmount.toLocaleString('en-IN'),
@@ -113,7 +116,7 @@ export class FeeAgent {
             studentMatch.dueDate
           ]]
         };
-        text += `\n\n📄 *Generated ${ctx.format} document ready for instant download below.*`;
+        text += `\n\n📄 *Generated ${ctx.format} document ready for download below.*`;
       }
 
       return {
@@ -131,19 +134,19 @@ export class FeeAgent {
       };
     }
 
-    // 2. AGGREGATE College / Department Query
+    // 2. AGGREGATE Query
     const aggregate = await FeeService.getAggregateFees(ctx.targetCourse);
 
     if (aggregate.status === 'CONNECTION_ERROR') {
       return {
-        text: "I'm unable to access student records right now. Please try again.",
+        text: "⚠️ Unable to access student records right now. Please try again in a moment.",
         agent: 'FEE'
       };
     }
 
     if (aggregate.status === 'NOT_FOUND' || aggregate.records.length === 0) {
       return {
-        text: "No fee records found for this cohort.",
+        text: "I couldn't find fee records matching that query.",
         agent: 'FEE'
       };
     }
@@ -155,10 +158,11 @@ export class FeeAgent {
       `• **Collection Rate:** ${aggregate.collectionRate}\n` +
       `• **Total Records Analyzed:** ${aggregate.records.length} student records\n\n`;
 
-    const headers = ['Student Name', 'Course', 'Total Fee (₹)', 'Paid (₹)', 'Due (₹)', 'Status'];
+    const headers = ['Student Name', 'Student ID', 'Department', 'Total Fee (₹)', 'Paid (₹)', 'Due (₹)', 'Status'];
     const rows = aggregate.records.map(r => [
       r.studentName,
-      r.course,
+      r.studentId,
+      r.departmentName || 'N/A',
       r.totalFee.toLocaleString('en-IN'),
       r.paidAmount.toLocaleString('en-IN'),
       r.dueAmount.toLocaleString('en-IN'),

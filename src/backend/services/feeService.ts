@@ -1,5 +1,4 @@
 import { supabase, supabaseAdmin, isSupabaseConfigured } from '../supabaseClient';
-import { FEE_RECORDS, FeeRecord } from '../../lib/mockDatabase';
 import { QueryStatus } from './studentService';
 
 export interface StudentFeeSummaryRow {
@@ -20,22 +19,38 @@ export interface StudentFeeSummaryRow {
   due_date?: string;
 }
 
+export interface FeeRecordItem {
+  id: string;
+  studentId: string;
+  studentName: string;
+  departmentCode?: string;
+  departmentName?: string;
+  className?: string;
+  section?: string;
+  semester: string;
+  academicYear: string;
+  feeType?: string;
+  totalFee: number;
+  paidAmount: number;
+  dueAmount: number;
+  status: string;
+  dueDate: string;
+}
+
 export interface FeeQueryResult {
   status: QueryStatus;
-  record: FeeRecord | null;
+  record: FeeRecordItem | null;
   errorMessage?: string;
 }
 
-const useDemoData = process.env.NEXT_PUBLIC_USE_DEMO_DATA === 'true';
-
 export class FeeService {
   /**
-   * Fetch all fee records
+   * Fetch all fee records from public.student_fee_summary
    */
-  public static async getAllFeeRecords(): Promise<{ status: QueryStatus; records: FeeRecord[] }> {
+  public static async getAllFeeRecords(): Promise<{ status: QueryStatus; records: FeeRecordItem[] }> {
     const client = supabaseAdmin || supabase;
     if (!isSupabaseConfigured() || !client) {
-      if (useDemoData) return { status: 'SUCCESS', records: FEE_RECORDS };
+      console.log('[Supabase Diagnostic] Service: feeService Source: public.student_fee_summary Status: ERROR Message: Client unavailable');
       return { status: 'CONNECTION_ERROR', records: [] };
     }
 
@@ -44,45 +59,51 @@ export class FeeService {
         .from('student_fee_summary')
         .select('*');
 
-      if (!viewErr && viewData && viewData.length > 0) {
+      if (viewErr) {
+        console.log(`[Supabase Diagnostic] Service: feeService Source: public.student_fee_summary Status: ERROR Code: ${viewErr.code} Message: ${viewErr.message}`);
+        return { status: 'CONNECTION_ERROR', records: [] };
+      }
+
+      const count = viewData?.length || 0;
+      console.log(`[Supabase Diagnostic] Service: feeService Source: public.student_fee_summary Status: SUCCESS Rows: ${count}`);
+
+      if (viewData && viewData.length > 0) {
         return {
           status: 'SUCCESS',
           records: viewData.map((d: StudentFeeSummaryRow) => ({
             id: `fee-${d.student_id}`,
             studentId: d.student_id,
             studentName: `${d.first_name || ''} ${d.last_name || ''}`.trim() || 'Student',
-            course: d.class_name || d.department_name || d.department_code || 'B.E. CSE',
+            departmentCode: d.department_code,
+            departmentName: d.department_name,
+            className: d.class_name,
+            section: d.section,
             semester: d.semester || 'Odd Sem',
             academicYear: d.academic_year || '2025-26',
+            feeType: d.fee_type || 'Tuition Fee',
             totalFee: Number(d.amount || 0),
             paidAmount: Number(d.paid_amount || 0),
             dueAmount: Number(d.pending_amount || Math.max(0, (d.amount || 0) - (d.paid_amount || 0))),
-            status: (d.payment_status?.toUpperCase() as any) || (Number(d.pending_amount || 0) === 0 ? 'PAID' : 'PARTIAL'),
-            dueDate: d.due_date || '2025-09-30',
+            status: d.payment_status || (Number(d.pending_amount || 0) === 0 ? 'Fully Paid' : 'Pending Due'),
+            dueDate: d.due_date || 'N/A',
           }))
         };
       }
 
-      if (viewErr) {
-        if (useDemoData) return { status: 'SUCCESS', records: FEE_RECORDS };
-        return { status: 'CONNECTION_ERROR', records: [] };
-      }
-
-      if (useDemoData) return { status: 'SUCCESS', records: FEE_RECORDS };
       return { status: 'NOT_FOUND', records: [] };
-    } catch (err) {
-      if (useDemoData) return { status: 'SUCCESS', records: FEE_RECORDS };
+    } catch (err: any) {
+      console.log(`[Supabase Diagnostic] Service: feeService Source: public.student_fee_summary Status: EXCEPTION Message: ${err.message}`);
       return { status: 'CONNECTION_ERROR', records: [] };
     }
   }
 
   /**
-   * Get fee statement for a specific student with status
+   * Get fee statement for a specific student
    */
   public static async getStudentFeeDetailed(studentId?: string, studentName?: string): Promise<FeeQueryResult> {
     const client = supabaseAdmin || supabase;
     if (!isSupabaseConfigured() || !client) {
-      if (useDemoData) return this.getDemoFee(studentId, studentName);
+      console.log('[Supabase Diagnostic] Service: feeService Source: public.student_fee_summary Status: ERROR Message: Client unavailable');
       return { status: 'CONNECTION_ERROR', record: null, errorMessage: "I'm unable to access student records right now. Please try again." };
     }
 
@@ -101,9 +122,12 @@ export class FeeService {
 
       const { data, error } = await query.limit(1);
       if (error) {
-        if (useDemoData) return this.getDemoFee(studentId, studentName);
+        console.log(`[Supabase Diagnostic] Service: feeService Source: public.student_fee_summary Student: ${studentId || studentName} Status: ERROR Code: ${error.code} Message: ${error.message}`);
         return { status: 'CONNECTION_ERROR', record: null, errorMessage: "I'm unable to access student records right now. Please try again." };
       }
+
+      const count = data?.length || 0;
+      console.log(`[Supabase Diagnostic] Service: feeService Source: public.student_fee_summary Student: ${studentId || studentName} Status: SUCCESS Rows: ${count}`);
 
       if (data && data.length > 0) {
         const d: StudentFeeSummaryRow = data[0];
@@ -116,43 +140,32 @@ export class FeeService {
             id: `fee-${d.student_id}`,
             studentId: d.student_id,
             studentName: `${d.first_name || ''} ${d.last_name || ''}`.trim() || studentName || 'Student',
-            course: d.class_name || d.department_name || 'B.E. CSE',
+            departmentCode: d.department_code,
+            departmentName: d.department_name,
+            className: d.class_name,
+            section: d.section,
             semester: d.semester || 'Odd Sem',
             academicYear: d.academic_year || '2025-26',
+            feeType: d.fee_type || 'Tuition Fee',
             totalFee: total,
             paidAmount: paid,
             dueAmount: due,
-            status: (d.payment_status?.toUpperCase() as any) || (due === 0 ? 'PAID' : 'PARTIAL'),
-            dueDate: d.due_date || '2025-09-30',
+            status: d.payment_status || (due === 0 ? 'Fully Paid' : 'Pending Due'),
+            dueDate: d.due_date || 'N/A',
           }
         };
       }
 
-      if (useDemoData) return this.getDemoFee(studentId, studentName);
       return { status: 'NOT_FOUND', record: null };
-    } catch (err) {
-      if (useDemoData) return this.getDemoFee(studentId, studentName);
+    } catch (err: any) {
+      console.log(`[Supabase Diagnostic] Service: feeService Source: public.student_fee_summary Status: EXCEPTION Message: ${err.message}`);
       return { status: 'CONNECTION_ERROR', record: null, errorMessage: "I'm unable to access student records right now. Please try again." };
     }
   }
 
-  public static async getStudentFee(studentId?: string, studentName?: string): Promise<FeeRecord | null> {
+  public static async getStudentFee(studentId?: string, studentName?: string): Promise<FeeRecordItem | null> {
     const res = await this.getStudentFeeDetailed(studentId, studentName);
     return res.record;
-  }
-
-  private static getDemoFee(studentId?: string, studentName?: string): FeeQueryResult {
-    const all = FEE_RECORDS;
-    if (studentId) {
-      const match = all.find(r => r.studentId === studentId);
-      if (match) return { status: 'SUCCESS', record: match };
-    }
-    if (studentName) {
-      const clean = studentName.toLowerCase();
-      const match = all.find(r => r.studentName.toLowerCase().includes(clean));
-      if (match) return { status: 'SUCCESS', record: match };
-    }
-    return { status: 'NOT_FOUND', record: null };
   }
 
   /**
@@ -160,7 +173,7 @@ export class FeeService {
    */
   public static async getAggregateFees(courseOrDept?: string): Promise<{
     status: QueryStatus;
-    records: FeeRecord[];
+    records: FeeRecordItem[];
     totalFee: number;
     paidAmount: number;
     dueAmount: number;
@@ -168,7 +181,7 @@ export class FeeService {
   }> {
     const { status, records: all } = await this.getAllFeeRecords();
     const filtered = courseOrDept 
-      ? all.filter(r => r.course.toLowerCase().includes(courseOrDept.toLowerCase()))
+      ? all.filter(r => (r.departmentName || r.className || '').toLowerCase().includes(courseOrDept.toLowerCase()))
       : all;
 
     const totalFee = filtered.reduce((acc, r) => acc + r.totalFee, 0);

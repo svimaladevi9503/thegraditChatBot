@@ -1,5 +1,4 @@
 import { supabase, supabaseAdmin, isSupabaseConfigured } from '../supabaseClient';
-import { ATTENDANCE_RECORDS, AttendanceRecord } from '../../lib/mockDatabase';
 import { QueryStatus } from './studentService';
 
 export interface StudentAttendanceSummaryRow {
@@ -17,22 +16,35 @@ export interface StudentAttendanceSummaryRow {
   attendance_percentage: number;
 }
 
+export interface AttendanceRecordItem {
+  id: string;
+  studentId: string;
+  studentName: string;
+  departmentCode?: string;
+  departmentName?: string;
+  className?: string;
+  section?: string;
+  semester: string;
+  academicYear: string;
+  totalClasses: number;
+  attendedClasses: number;
+  attendancePct: number;
+}
+
 export interface AttendanceQueryResult {
   status: QueryStatus;
-  record: AttendanceRecord | null;
+  record: AttendanceRecordItem | null;
   errorMessage?: string;
 }
 
-const useDemoData = process.env.NEXT_PUBLIC_USE_DEMO_DATA === 'true';
-
 export class AttendanceService {
   /**
-   * Fetch all attendance records
+   * Fetch all attendance records from public.student_attendance_summary
    */
-  public static async getAllAttendance(): Promise<{ status: QueryStatus; records: AttendanceRecord[] }> {
+  public static async getAllAttendance(): Promise<{ status: QueryStatus; records: AttendanceRecordItem[] }> {
     const client = supabaseAdmin || supabase;
     if (!isSupabaseConfigured() || !client) {
-      if (useDemoData) return { status: 'SUCCESS', records: ATTENDANCE_RECORDS };
+      console.log('[Supabase Diagnostic] Service: attendanceService Source: public.student_attendance_summary Status: ERROR Message: Client unavailable');
       return { status: 'CONNECTION_ERROR', records: [] };
     }
 
@@ -41,44 +53,49 @@ export class AttendanceService {
         .from('student_attendance_summary')
         .select('*');
 
-      if (!viewErr && viewData && viewData.length > 0) {
+      if (viewErr) {
+        console.log(`[Supabase Diagnostic] Service: attendanceService Source: public.student_attendance_summary Status: ERROR Code: ${viewErr.code} Message: ${viewErr.message}`);
+        return { status: 'CONNECTION_ERROR', records: [] };
+      }
+
+      const count = viewData?.length || 0;
+      console.log(`[Supabase Diagnostic] Service: attendanceService Source: public.student_attendance_summary Status: SUCCESS Rows: ${count}`);
+
+      if (viewData && viewData.length > 0) {
         return {
           status: 'SUCCESS',
           records: viewData.map((d: StudentAttendanceSummaryRow) => ({
             id: `att-${d.student_id}`,
             studentId: d.student_id,
             studentName: `${d.first_name || ''} ${d.last_name || ''}`.trim() || 'Student',
-            course: d.class_name || d.department_name || d.department_code || 'B.E. CSE',
+            departmentCode: d.department_code,
+            departmentName: d.department_name,
+            className: d.class_name,
+            section: d.section,
             semester: d.semester || 'Odd Sem',
             academicYear: d.academic_year || '2025-26',
-            subject: d.department_name ? `${d.department_name} Core` : 'Engineering Modules',
-            totalClasses: Number(d.total_classes || 60),
+            totalClasses: Number(d.total_classes || 0),
             attendedClasses: Number(d.attended_classes || 0),
             attendancePct: Number(d.attendance_percentage || 0),
           }))
         };
       }
 
-      if (viewErr) {
-        if (useDemoData) return { status: 'SUCCESS', records: ATTENDANCE_RECORDS };
-        return { status: 'CONNECTION_ERROR', records: [] };
-      }
-
-      if (useDemoData) return { status: 'SUCCESS', records: ATTENDANCE_RECORDS };
+      // Query succeeded, 0 rows
       return { status: 'NOT_FOUND', records: [] };
-    } catch (err) {
-      if (useDemoData) return { status: 'SUCCESS', records: ATTENDANCE_RECORDS };
+    } catch (err: any) {
+      console.log(`[Supabase Diagnostic] Service: attendanceService Source: public.student_attendance_summary Status: EXCEPTION Message: ${err.message}`);
       return { status: 'CONNECTION_ERROR', records: [] };
     }
   }
 
   /**
-   * Get attendance for a specific student with status
+   * Get attendance for a specific student
    */
   public static async getStudentAttendanceDetailed(studentId?: string, studentName?: string): Promise<AttendanceQueryResult> {
     const client = supabaseAdmin || supabase;
     if (!isSupabaseConfigured() || !client) {
-      if (useDemoData) return this.getDemoAttendance(studentId, studentName);
+      console.log('[Supabase Diagnostic] Service: attendanceService Source: public.student_attendance_summary Status: ERROR Message: Client unavailable');
       return { status: 'CONNECTION_ERROR', record: null, errorMessage: "I'm unable to access student records right now. Please try again." };
     }
 
@@ -97,9 +114,12 @@ export class AttendanceService {
 
       const { data, error } = await query.limit(1);
       if (error) {
-        if (useDemoData) return this.getDemoAttendance(studentId, studentName);
+        console.log(`[Supabase Diagnostic] Service: attendanceService Source: public.student_attendance_summary Student: ${studentId || studentName} Status: ERROR Code: ${error.code} Message: ${error.message}`);
         return { status: 'CONNECTION_ERROR', record: null, errorMessage: "I'm unable to access student records right now. Please try again." };
       }
+
+      const count = data?.length || 0;
+      console.log(`[Supabase Diagnostic] Service: attendanceService Source: public.student_attendance_summary Student: ${studentId || studentName} Status: SUCCESS Rows: ${count}`);
 
       if (data && data.length > 0) {
         const d: StudentAttendanceSummaryRow = data[0];
@@ -109,42 +129,29 @@ export class AttendanceService {
             id: `att-${d.student_id}`,
             studentId: d.student_id,
             studentName: `${d.first_name || ''} ${d.last_name || ''}`.trim() || studentName || 'Student',
-            course: d.class_name || d.department_name || 'B.E. CSE',
+            departmentCode: d.department_code,
+            departmentName: d.department_name,
+            className: d.class_name,
+            section: d.section,
             semester: d.semester || 'Odd Sem',
             academicYear: d.academic_year || '2025-26',
-            subject: 'Computer Networks & Core Systems',
-            totalClasses: Number(d.total_classes || 60),
+            totalClasses: Number(d.total_classes || 0),
             attendedClasses: Number(d.attended_classes || 0),
             attendancePct: Number(d.attendance_percentage || 0),
           }
         };
       }
 
-      if (useDemoData) return this.getDemoAttendance(studentId, studentName);
       return { status: 'NOT_FOUND', record: null };
-    } catch (err) {
-      if (useDemoData) return this.getDemoAttendance(studentId, studentName);
+    } catch (err: any) {
+      console.log(`[Supabase Diagnostic] Service: attendanceService Source: public.student_attendance_summary Status: EXCEPTION Message: ${err.message}`);
       return { status: 'CONNECTION_ERROR', record: null, errorMessage: "I'm unable to access student records right now. Please try again." };
     }
   }
 
-  public static async getStudentAttendance(studentId?: string, studentName?: string): Promise<AttendanceRecord | null> {
+  public static async getStudentAttendance(studentId?: string, studentName?: string): Promise<AttendanceRecordItem | null> {
     const res = await this.getStudentAttendanceDetailed(studentId, studentName);
     return res.record;
-  }
-
-  private static getDemoAttendance(studentId?: string, studentName?: string): AttendanceQueryResult {
-    const all = ATTENDANCE_RECORDS;
-    if (studentId) {
-      const match = all.find(r => r.studentId === studentId);
-      if (match) return { status: 'SUCCESS', record: match };
-    }
-    if (studentName) {
-      const clean = studentName.toLowerCase();
-      const match = all.find(r => r.studentName.toLowerCase().includes(clean));
-      if (match) return { status: 'SUCCESS', record: match };
-    }
-    return { status: 'NOT_FOUND', record: null };
   }
 
   /**
@@ -152,7 +159,7 @@ export class AttendanceService {
    */
   public static async getAggregateAttendance(courseOrDept?: string): Promise<{
     status: QueryStatus;
-    records: AttendanceRecord[];
+    records: AttendanceRecordItem[];
     avgPercentage: string;
     totalClasses: number;
     attendedClasses: number;
@@ -161,7 +168,7 @@ export class AttendanceService {
   }> {
     const { status, records: all } = await this.getAllAttendance();
     const filtered = courseOrDept 
-      ? all.filter(r => r.course.toLowerCase().includes(courseOrDept.toLowerCase()))
+      ? all.filter(r => (r.departmentName || r.className || '').toLowerCase().includes(courseOrDept.toLowerCase()))
       : all;
 
     const totalClasses = filtered.reduce((acc, r) => acc + r.totalClasses, 0);

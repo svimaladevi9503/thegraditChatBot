@@ -1,5 +1,5 @@
 import { supabase, supabaseAdmin, isSupabaseConfigured } from '../supabaseClient';
-import { STUDENTS_DATA, Student } from '../../lib/mockDatabase';
+import { Student } from '../../lib/mockDatabase';
 
 export interface SupabaseStudentRow {
   id: string;
@@ -33,8 +33,6 @@ const STOP_WORDS = new Set([
   'overall', 'collection', 'summary', 'all', 'college', 'class', 'wise', 'list'
 ]);
 
-const useDemoData = process.env.NEXT_PUBLIC_USE_DEMO_DATA === 'true';
-
 export class StudentService {
   /**
    * Extract potential student name candidates from natural language query
@@ -61,7 +59,7 @@ export class StudentService {
       }
     }
 
-    // 2. Add full roll numbers
+    // 2. Add full roll numbers (e.g. 2025CSE019)
     for (const w of words) {
       if ((/\d/.test(w) && /[a-zA-Z]/.test(w)) || w.toUpperCase().startsWith('ST-')) {
         candidates.unshift(w);
@@ -77,7 +75,7 @@ export class StudentService {
   public static async getAllStudents(): Promise<{ status: QueryStatus; data: Student[] }> {
     const client = supabaseAdmin || supabase;
     if (!isSupabaseConfigured() || !client) {
-      if (useDemoData) return { status: 'SUCCESS', data: STUDENTS_DATA };
+      console.log('[Supabase Diagnostic] Service: studentService Source: public.students Status: ERROR Message: Supabase not configured');
       return { status: 'CONNECTION_ERROR', data: [] };
     }
 
@@ -88,9 +86,12 @@ export class StudentService {
         .eq('is_active', true);
 
       if (error) {
-        if (useDemoData) return { status: 'SUCCESS', data: STUDENTS_DATA };
+        console.log(`[Supabase Diagnostic] Service: studentService Source: public.students Status: ERROR Code: ${error.code} Message: ${error.message}`);
         return { status: 'CONNECTION_ERROR', data: [] };
       }
+
+      const count = data?.length || 0;
+      console.log(`[Supabase Diagnostic] Service: studentService Source: public.students Status: SUCCESS Rows: ${count}`);
 
       if (data && data.length > 0) {
         return {
@@ -109,11 +110,10 @@ export class StudentService {
         };
       }
 
-      // 0 rows returned
-      if (useDemoData) return { status: 'SUCCESS', data: STUDENTS_DATA };
+      // Query succeeded, 0 rows returned
       return { status: 'NOT_FOUND', data: [] };
-    } catch (err) {
-      if (useDemoData) return { status: 'SUCCESS', data: STUDENTS_DATA };
+    } catch (err: any) {
+      console.log(`[Supabase Diagnostic] Service: studentService Source: public.students Status: EXCEPTION Message: ${err.message}`);
       return { status: 'CONNECTION_ERROR', data: [] };
     }
   }
@@ -127,9 +127,7 @@ export class StudentService {
     const client = supabaseAdmin || supabase;
 
     if (!isSupabaseConfigured() || !client) {
-      if (useDemoData) {
-        return this.findStudentDemo(query, candidates);
-      }
+      console.log('[Supabase Diagnostic] Service: studentService Source: public.students Status: ERROR Message: Supabase client unavailable');
       return { status: 'CONNECTION_ERROR', student: null, errorMessage: "I'm unable to access student records right now. Please try again." };
     }
 
@@ -146,9 +144,12 @@ export class StudentService {
           .limit(5);
 
         if (error) {
-          if (useDemoData) return this.findStudentDemo(query, candidates);
+          console.log(`[Supabase Diagnostic] Service: studentService Source: public.students Query: ${cand} Status: ERROR Code: ${error.code} Message: ${error.message}`);
           return { status: 'CONNECTION_ERROR', student: null, errorMessage: "I'm unable to access student records right now. Please try again." };
         }
+
+        const count = data?.length || 0;
+        console.log(`[Supabase Diagnostic] Service: studentService Source: public.students Candidate: ${cand} Status: SUCCESS Rows: ${count}`);
 
         if (data && data.length > 0) {
           const mapped: Student[] = data.map((d: SupabaseStudentRow) => ({
@@ -176,16 +177,10 @@ export class StudentService {
         }
       }
 
-      // No match found in live database
-      if (useDemoData) {
-        return this.findStudentDemo(query, candidates);
-      }
-
+      // No match found in database (Query succeeded, 0 rows)
       return { status: 'NOT_FOUND', student: null };
-    } catch (err) {
-      if (useDemoData) {
-        return this.findStudentDemo(query, candidates);
-      }
+    } catch (err: any) {
+      console.log(`[Supabase Diagnostic] Service: studentService Source: public.students Status: EXCEPTION Message: ${err.message}`);
       return { status: 'CONNECTION_ERROR', student: null, errorMessage: "I'm unable to access student records right now. Please try again." };
     }
   }
@@ -196,27 +191,5 @@ export class StudentService {
   public static async findStudent(query: string): Promise<Student | null> {
     const result = await this.findStudentDetailed(query);
     return result.student;
-  }
-
-  private static findStudentDemo(query: string, candidates: string[]): StudentResolutionResult {
-    const clean = query.toLowerCase();
-    const all = STUDENTS_DATA;
-
-    for (const cand of (candidates.length > 0 ? candidates : [query])) {
-      const cLower = cand.toLowerCase();
-      const matches = all.filter(s => 
-        s.rollNumber.toLowerCase().includes(cLower) ||
-        s.name.toLowerCase().includes(cLower) ||
-        s.name.split(' ')[0].toLowerCase() === cLower
-      );
-      if (matches.length === 1) return { status: 'SUCCESS', student: matches[0] };
-      if (matches.length > 1) return { status: 'SUCCESS', student: null, multipleMatches: matches, isAmbiguous: true };
-    }
-
-    const byName = all.filter(s => clean.includes(s.name.toLowerCase()));
-    if (byName.length === 1) return { status: 'SUCCESS', student: byName[0] };
-    if (byName.length > 1) return { status: 'SUCCESS', student: null, multipleMatches: byName, isAmbiguous: true };
-
-    return { status: 'NOT_FOUND', student: null };
   }
 }

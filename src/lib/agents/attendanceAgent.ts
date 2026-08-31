@@ -1,5 +1,4 @@
-import { AttendanceRecord } from '../mockDatabase';
-import { AttendanceService, AttendanceQueryResult } from '../../backend/services/attendanceService';
+import { AttendanceService, AttendanceQueryResult, AttendanceRecordItem } from '../../backend/services/attendanceService';
 import { ExportDataPayload } from '../exportUtils';
 import { TimePeriodType, QueryScopeType, ExportFormatType } from './feeAgent';
 import { ResolvedStudent } from '../studentResolver';
@@ -38,22 +37,20 @@ export interface AttendanceAgentResult {
 export class AttendanceAgent {
   /**
    * Attendance Calculation Pipeline:
-   * 1. Supabase returns data -> Show live data
+   * 1. Supabase returns data -> Show verified live data (no fabricated fields)
    * 2. Supabase returns no student -> "I couldn't find a student matching that name."
-   * 3. Supabase connection fails -> "I'm unable to access student records right now. Please try again."
+   * 3. Supabase connection fails -> "⚠️ Unable to access student records right now. Please try again in a moment."
    */
   public static async execute(ctx: AttendanceAgentContext): Promise<AttendanceAgentResult> {
     let periodLabel = 'Academic Year 2025-26';
     if (ctx.period === 'ODD_SEM' || ctx.period === 'CURRENT_SEM') {
-      periodLabel = 'Odd Semester (2025-26)';
+      periodLabel = 'Odd Semester 2025-26';
     } else if (ctx.period === 'EVEN_SEM') {
-      periodLabel = 'Even Semester (2025-26)';
-    } else if (typeof ctx.period === 'string' && ctx.period.includes('2025')) {
-      periodLabel = 'Academic Session 2025-26';
+      periodLabel = 'Even Semester 2025-26';
     }
 
     // 1. SOLO Student Inquiries
-    const targetStudentId = ctx.resolvedStudent?.id || (ctx.resolvedStudent as any)?.rollNumber;
+    const targetStudentId = ctx.resolvedStudent?.id || ctx.resolvedStudent?.rollNumber;
     const targetStudentName = ctx.resolvedStudent?.name || ctx.targetStudent;
 
     if (ctx.scope === 'SOLO' || targetStudentName || targetStudentId) {
@@ -61,7 +58,7 @@ export class AttendanceAgent {
 
       if (detailed.status === 'CONNECTION_ERROR') {
         return {
-          text: "I'm unable to access student records right now. Please try again.",
+          text: "⚠️ Unable to access student records right now. Please try again in a moment.",
           agent: 'ATTENDANCE'
         };
       }
@@ -73,44 +70,48 @@ export class AttendanceAgent {
         };
       }
 
-      const record = detailed.record;
+      const record: AttendanceRecordItem = detailed.record;
       const isEligible = record.attendancePct >= 75.0;
       const statusIcon = isEligible ? '✅' : '⚠️';
+      const eligibilityText = isEligible ? 'Eligible for Examinations' : 'Attendance Shortage';
 
-      let text = `📋 **Attendance Details for ${record.studentName} [${periodLabel}]**\n\n` +
-        `• **Student ID / Roll:** ${ctx.resolvedStudent?.rollNumber || record.studentId}\n` +
-        `• **Course & Dept:** ${record.course}\n` +
-        `• **Subject Module:** ${record.subject}\n` +
+      let text = `📋 **Attendance Details for ${record.studentName}**\n\n` +
+        `• **Student ID / Roll:** ${record.studentId}\n` +
+        `• **Department:** ${record.departmentName || record.departmentCode || 'Not Specified'}\n` +
+        `• **Class:** ${record.className || 'Class Group'}${record.section ? ` (Sec ${record.section})` : ''}\n` +
+        `• **Semester:** ${record.semester}\n` +
+        `• **Academic Year:** ${record.academicYear}\n` +
         `• **Lectures Attended:** **${record.attendedClasses}** / **${record.totalClasses}** classes\n` +
-        `• **Attendance Score:** **${record.attendancePct}%**\n` +
-        `• **Exam Eligibility:** ${statusIcon} ${isEligible ? 'Eligible for Examinations (>= 75%)' : 'Attendance Shortage Alert (< 75%)'}\n`;
+        `• **Attendance:** **${record.attendancePct.toFixed(2)}%**\n` +
+        `• **Exam Eligibility:** ${statusIcon} ${eligibilityText}\n`;
 
       if (!isEligible) {
         const needed = Math.ceil((0.75 * record.totalClasses - record.attendedClasses) / (1 - 0.75));
-        text += `\n⚠️ *Recommendation: Must attend next ${Math.max(1, needed)} consecutive lectures to satisfy university examination eligibility.*`;
+        text += `\n⚠️ *Recommendation: Must attend next ${Math.max(1, needed)} consecutive lectures to satisfy 75% minimum eligibility requirement.*`;
       } else {
-        text += `\n✅ *Regular attendance standing maintained for ${periodLabel}.*`;
+        text += `\n✅ *Regular attendance standing maintained.*`;
       }
 
       let exportPayload: ExportDataPayload | undefined;
       if (ctx.format !== 'NONE') {
         exportPayload = {
-          title: `Official Attendance Transcript - ${record.studentName}`,
-          subtitle: `Roll: ${ctx.resolvedStudent?.rollNumber || record.studentId} | Period: ${periodLabel}`,
+          title: `Official Attendance Record - ${record.studentName}`,
+          subtitle: `Roll: ${record.studentId} | Period: ${periodLabel}`,
           generatedDate: new Date().toLocaleDateString('en-US', { dateStyle: 'long' }),
           summaryStats: [
-            { label: 'Attendance', value: `${record.attendancePct}%` },
+            { label: 'Attendance', value: `${record.attendancePct.toFixed(2)}%` },
             { label: 'Attended', value: `${record.attendedClasses}/${record.totalClasses}` },
             { label: 'Eligibility', value: isEligible ? 'Eligible' : 'Shortage' },
           ],
-          headers: ['Student Name', 'Course', 'Subject', 'Total Classes', 'Attended', 'Percentage', 'Eligibility'],
+          headers: ['Student Name', 'Student ID', 'Department', 'Class', 'Attended', 'Total Classes', 'Percentage', 'Eligibility'],
           rows: [[
             record.studentName,
-            record.course,
-            record.subject,
-            record.totalClasses,
+            record.studentId,
+            record.departmentName || 'N/A',
+            record.className || 'N/A',
             record.attendedClasses,
-            `${record.attendancePct}%`,
+            record.totalClasses,
+            `${record.attendancePct.toFixed(2)}%`,
             isEligible ? 'ELIGIBLE' : 'SHORTAGE'
           ]]
         };
@@ -132,19 +133,19 @@ export class AttendanceAgent {
       };
     }
 
-    // 2. AGGREGATE Class-Wise / Department / College Inquiries
+    // 2. AGGREGATE Inquiries
     const aggregate = await AttendanceService.getAggregateAttendance(ctx.targetCourse);
 
     if (aggregate.status === 'CONNECTION_ERROR') {
       return {
-        text: "I'm unable to access student records right now. Please try again.",
+        text: "⚠️ Unable to access student records right now. Please try again in a moment.",
         agent: 'ATTENDANCE'
       };
     }
 
     if (aggregate.status === 'NOT_FOUND' || aggregate.records.length === 0) {
       return {
-        text: "No attendance records found for this cohort.",
+        text: "I couldn't find attendance records matching that query.",
         agent: 'ATTENDANCE'
       };
     }
@@ -158,17 +159,17 @@ export class AttendanceAgent {
 
     aggregate.records.slice(0, 10).forEach(r => {
       const badge = r.attendancePct >= 75 ? '🟢' : '🔴';
-      text += `• ${badge} **${r.studentName}** (${r.course}): ${r.attendancePct}% [${r.subject}]\n`;
+      text += `• ${badge} **${r.studentName}** (${r.departmentName || r.className || 'Class'}): ${r.attendancePct.toFixed(1)}%\n`;
     });
 
-    const headers = ['Student Name', 'Course', 'Subject', 'Classes', 'Attended', 'Attendance %', 'Status'];
+    const headers = ['Student Name', 'Student ID', 'Department', 'Classes', 'Attended', 'Attendance %', 'Status'];
     const rows = aggregate.records.map(r => [
       r.studentName,
-      r.course,
-      r.subject,
+      r.studentId,
+      r.departmentName || 'N/A',
       r.totalClasses,
       r.attendedClasses,
-      `${r.attendancePct}%`,
+      `${r.attendancePct.toFixed(2)}%`,
       r.attendancePct >= 75 ? 'ELIGIBLE' : 'SHORTAGE'
     ]);
 

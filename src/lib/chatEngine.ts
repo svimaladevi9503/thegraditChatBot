@@ -184,7 +184,7 @@ export class OrchestratorAgent {
 
     if (detailedResolution.status === 'CONNECTION_ERROR') {
       return {
-        text: "I'm unable to access student records right now. Please try again.",
+        text: "⚠️ Unable to access student records right now. Please try again in a moment.",
         agent: 'ORCHESTRATOR',
         confidenceTier: 'TIER_1_REGEX',
       };
