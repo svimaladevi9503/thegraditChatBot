@@ -1,4 +1,4 @@
-import { supabase, supabaseAdmin, isSupabaseConfigured } from '../supabaseClient';
+import { getSupabaseServerClient, isSupabaseServerConfigured, getDatabaseAuthMode } from '../config/supabaseServer';
 
 export interface SupabaseStudentRow {
   id: string;
@@ -121,9 +121,9 @@ export class StudentService {
     matches: StudentEntity[];
     matchType?: 'EXACT_ID' | 'EXACT_FULL_NAME' | 'EXACT_FIRST_NAME' | 'EXACT_LAST_NAME' | 'PARTIAL';
   }> {
-    const client = supabaseAdmin || supabase;
-    if (!isSupabaseConfigured() || !client) {
-      console.log('[Supabase Diagnostic] Service: studentService Status: ERROR Message: Client unavailable');
+    const client = getSupabaseServerClient();
+    if (!isSupabaseServerConfigured() || !client) {
+      console.log('[Supabase Diagnostic] Service: studentService Status: ERROR Message: Server client unavailable');
       return { status: 'CONNECTION_ERROR', matches: [] };
     }
 
@@ -231,6 +231,15 @@ export class StudentService {
       if (partialData && partialData.length > 0) {
         const matches = this.mapStudentRows(partialData);
         return { status: 'SUCCESS', matches, matchType: 'PARTIAL' };
+      }
+
+      // Check if table access is blocked by RLS
+      const { count, error: countErr } = await client.from('students').select('*', { count: 'exact', head: true });
+      if (countErr || count === 0) {
+        if (getDatabaseAuthMode() === 'PUBLISHABLE') {
+          console.log('[Supabase Diagnostic] Service: studentService Status: DATABASE_PERMISSION_DENIED_OR_RLS_BLOCKED Mode: PUBLISHABLE');
+          return { status: 'CONNECTION_ERROR', matches: [] };
+        }
       }
 
       return { status: 'NOT_FOUND', matches: [] };

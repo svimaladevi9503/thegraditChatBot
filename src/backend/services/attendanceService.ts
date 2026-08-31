@@ -1,4 +1,4 @@
-import { supabase, supabaseAdmin, isSupabaseConfigured } from '../supabaseClient';
+import { getSupabaseServerClient, isSupabaseServerConfigured, getDatabaseAuthMode } from '../config/supabaseServer';
 import { QueryStatus } from './studentService';
 
 export interface StudentAttendanceSummaryRow {
@@ -42,8 +42,8 @@ export class AttendanceService {
    * Fetch all attendance records from public.student_attendance_summary
    */
   public static async getAllAttendance(): Promise<{ status: QueryStatus; records: AttendanceRecordItem[] }> {
-    const client = supabaseAdmin || supabase;
-    if (!isSupabaseConfigured() || !client) {
+    const client = getSupabaseServerClient();
+    if (!isSupabaseServerConfigured() || !client) {
       console.log('[Supabase Diagnostic] Service: attendanceService Source: public.student_attendance_summary Status: ERROR Message: Client unavailable');
       return { status: 'CONNECTION_ERROR', records: [] };
     }
@@ -60,6 +60,11 @@ export class AttendanceService {
 
       const count = viewData?.length || 0;
       console.log(`[Supabase Diagnostic] Service: attendanceService Source: public.student_attendance_summary Status: SUCCESS Rows: ${count}`);
+
+      if (count === 0 && getDatabaseAuthMode() === 'PUBLISHABLE') {
+        console.log('[Supabase Diagnostic] Service: attendanceService Status: DATABASE_PERMISSION_DENIED_OR_RLS_BLOCKED Mode: PUBLISHABLE');
+        return { status: 'CONNECTION_ERROR', records: [] };
+      }
 
       if (viewData && viewData.length > 0) {
         return {
@@ -93,9 +98,9 @@ export class AttendanceService {
    * Get attendance for a specific student
    */
   public static async getStudentAttendanceDetailed(studentId?: string, studentName?: string): Promise<AttendanceQueryResult> {
-    const client = supabaseAdmin || supabase;
-    if (!isSupabaseConfigured() || !client) {
-      console.log('[Supabase Diagnostic] Service: attendanceService Source: public.student_attendance_summary Status: ERROR Message: Client unavailable');
+    const client = getSupabaseServerClient();
+    if (!isSupabaseServerConfigured() || !client) {
+      console.log('[Supabase Diagnostic] Service: attendanceService Source: public.student_attendance_summary Status: ERROR Message: Server client unavailable');
       return { status: 'CONNECTION_ERROR', record: null, errorMessage: "I'm unable to access student records right now. Please try again." };
     }
 
@@ -120,6 +125,11 @@ export class AttendanceService {
 
       const count = data?.length || 0;
       console.log(`[Supabase Diagnostic] Service: attendanceService Source: public.student_attendance_summary Student: ${studentId || studentName} Status: SUCCESS Rows: ${count}`);
+
+      if (count === 0 && getDatabaseAuthMode() === 'PUBLISHABLE') {
+        console.log('[Supabase Diagnostic] Service: attendanceService Status: DATABASE_PERMISSION_DENIED_OR_RLS_BLOCKED Mode: PUBLISHABLE');
+        return { status: 'CONNECTION_ERROR', record: null, errorMessage: "⚠️ Unable to access student records right now. Please try again in a moment." };
+      }
 
       if (data && data.length > 0) {
         const d: StudentAttendanceSummaryRow = data[0];

@@ -18,12 +18,26 @@ export const AgentBadge: React.FC<AgentBadgeProps> = ({ agent, confidenceTier })
           dotColor: 'bg-emerald-500',
           icon: '💳'
         };
+      case 'COLLECTIVE_FEE':
+        return {
+          label: 'Collective Fee',
+          bgColor: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+          dotColor: 'bg-emerald-500',
+          icon: '💰'
+        };
       case 'ATTENDANCE':
         return {
           label: 'Attendance Agent',
           bgColor: 'bg-blue-50 text-blue-700 border-blue-200',
           dotColor: 'bg-blue-500',
           icon: '📋'
+        };
+      case 'COLLECTIVE_ATTENDANCE':
+        return {
+          label: 'Collective Attendance',
+          bgColor: 'bg-blue-50 text-blue-700 border-blue-200',
+          dotColor: 'bg-blue-500',
+          icon: '📊'
         };
       case 'MISC':
         return {

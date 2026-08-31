@@ -1,4 +1,4 @@
-import { supabase, supabaseAdmin, isSupabaseConfigured } from '../supabaseClient';
+import { getSupabaseServerClient, isSupabaseServerConfigured, getDatabaseAuthMode } from '../config/supabaseServer';
 import { QueryStatus } from './studentService';
 
 export interface StudentFeeSummaryRow {
@@ -48,9 +48,9 @@ export class FeeService {
    * Fetch all fee records from public.student_fee_summary
    */
   public static async getAllFeeRecords(): Promise<{ status: QueryStatus; records: FeeRecordItem[] }> {
-    const client = supabaseAdmin || supabase;
-    if (!isSupabaseConfigured() || !client) {
-      console.log('[Supabase Diagnostic] Service: feeService Source: public.student_fee_summary Status: ERROR Message: Client unavailable');
+    const client = getSupabaseServerClient();
+    if (!isSupabaseServerConfigured() || !client) {
+      console.log('[Supabase Diagnostic] Service: feeService Source: public.student_fee_summary Status: ERROR Message: Server client unavailable');
       return { status: 'CONNECTION_ERROR', records: [] };
     }
 
@@ -67,26 +67,36 @@ export class FeeService {
       const count = viewData?.length || 0;
       console.log(`[Supabase Diagnostic] Service: feeService Source: public.student_fee_summary Status: SUCCESS Rows: ${count}`);
 
+      if (count === 0 && getDatabaseAuthMode() === 'PUBLISHABLE') {
+        console.log('[Supabase Diagnostic] Service: feeService Status: DATABASE_PERMISSION_DENIED_OR_RLS_BLOCKED Mode: PUBLISHABLE');
+        return { status: 'CONNECTION_ERROR', records: [] };
+      }
+
       if (viewData && viewData.length > 0) {
         return {
           status: 'SUCCESS',
-          records: viewData.map((d: StudentFeeSummaryRow) => ({
-            id: `fee-${d.student_id}`,
-            studentId: d.student_id,
-            studentName: `${d.first_name || ''} ${d.last_name || ''}`.trim() || 'Student',
-            departmentCode: d.department_code,
-            departmentName: d.department_name,
-            className: d.class_name,
-            section: d.section,
-            semester: d.semester || 'Odd Sem',
-            academicYear: d.academic_year || '2025-26',
-            feeType: d.fee_type || 'Tuition Fee',
-            totalFee: Number(d.amount || 0),
-            paidAmount: Number(d.paid_amount || 0),
-            dueAmount: Number(d.pending_amount || Math.max(0, (d.amount || 0) - (d.paid_amount || 0))),
-            status: d.payment_status || (Number(d.pending_amount || 0) === 0 ? 'Fully Paid' : 'Pending Due'),
-            dueDate: d.due_date || 'N/A',
-          }))
+          records: viewData.map((d: StudentFeeSummaryRow) => {
+            const total = Number(d.amount || 0);
+            const paid = Number(d.paid_amount || 0);
+            const due = Number(d.pending_amount || Math.max(0, total - paid));
+            return {
+              id: `fee-${d.student_id}`,
+              studentId: d.student_id,
+              studentName: `${d.first_name || ''} ${d.last_name || ''}`.trim() || 'Student',
+              departmentCode: d.department_code,
+              departmentName: d.department_name,
+              className: d.class_name,
+              section: d.section,
+              semester: d.semester || 'Odd Sem',
+              academicYear: d.academic_year || '2025-26',
+              feeType: d.fee_type || 'Tuition Fee',
+              totalFee: total,
+              paidAmount: paid,
+              dueAmount: due,
+              status: d.payment_status || (due === 0 ? 'PAID' : paid > 0 ? 'PARTIAL' : 'PENDING'),
+              dueDate: d.due_date || '2025-10-15',
+            };
+          }),
         };
       }
 
@@ -101,9 +111,9 @@ export class FeeService {
    * Get fee statement for a specific student
    */
   public static async getStudentFeeDetailed(studentId?: string, studentName?: string): Promise<FeeQueryResult> {
-    const client = supabaseAdmin || supabase;
-    if (!isSupabaseConfigured() || !client) {
-      console.log('[Supabase Diagnostic] Service: feeService Source: public.student_fee_summary Status: ERROR Message: Client unavailable');
+    const client = getSupabaseServerClient();
+    if (!isSupabaseServerConfigured() || !client) {
+      console.log('[Supabase Diagnostic] Service: feeService Source: public.student_fee_summary Status: ERROR Message: Server client unavailable');
       return { status: 'CONNECTION_ERROR', record: null, errorMessage: "I'm unable to access student records right now. Please try again." };
     }
 
@@ -128,6 +138,11 @@ export class FeeService {
 
       const count = data?.length || 0;
       console.log(`[Supabase Diagnostic] Service: feeService Source: public.student_fee_summary Student: ${studentId || studentName} Status: SUCCESS Rows: ${count}`);
+
+      if (count === 0 && getDatabaseAuthMode() === 'PUBLISHABLE') {
+        console.log('[Supabase Diagnostic] Service: feeService Status: DATABASE_PERMISSION_DENIED_OR_RLS_BLOCKED Mode: PUBLISHABLE');
+        return { status: 'CONNECTION_ERROR', record: null, errorMessage: "⚠️ Unable to access student records right now. Please try again in a moment." };
+      }
 
       if (data && data.length > 0) {
         const d: StudentFeeSummaryRow = data[0];
