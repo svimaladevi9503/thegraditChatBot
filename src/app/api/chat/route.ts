@@ -4,7 +4,7 @@ import { OrchestratorAgent } from '@/lib/chatEngine';
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { query, userId, userRole } = body;
+    const { query, userId } = body;
 
     if (!query || typeof query !== 'string') {
       return NextResponse.json(
@@ -13,12 +13,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const response = await OrchestratorAgent.processQuery(query, userId || 'st-00', userRole || 'ADMIN');
+    const response = await OrchestratorAgent.processQuery(query, userId || 'st-00');
     return NextResponse.json(response);
   } catch (error: any) {
     console.error('API /api/chat error:', error);
     return NextResponse.json(
-      { error: 'Internal server error processing chat request', text: 'Error executing request' },
+      { error: 'Internal server error processing chat query' },
       { status: 500 }
     );
   }

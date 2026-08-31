@@ -1,4 +1,3 @@
-import { createClient } from '@supabase/supabase-js';
 import { FeeAgent, FeeAgentResult, TimePeriodType, QueryScopeType, ExportFormatType } from './agents/feeAgent';
 import { AttendanceAgent, AttendanceAgentResult } from './agents/attendanceAgent';
 import { MiscAgent, MiscAgentResult } from './agents/miscAgent';
@@ -25,12 +24,8 @@ export interface ChatMessageResponse {
   error?: boolean;
 }
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || '';
-const supabase = supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey) : null;
-
 // =========================================================
-// Tier 1: Deterministic Regular Expressions
+// Deterministic Regular Expressions
 // =========================================================
 
 const FEE_KEYWORDS = /\b(fee|fees|tuition|dues|due|payment|paid|receipt|invoice|fine|scholarship|balance|cost|financial)\b/i;
@@ -112,8 +107,6 @@ export class OrchestratorAgent {
   }
 
   private static async matchIntentTier2(query: string): Promise<{ agent: AgentType; action: string } | null> {
-    const qLower = query.toLowerCase();
-
     // 1. Try Supabase RPC via IntentService
     const rpcResult = await IntentService.matchIntent(query, 0.30);
     if (rpcResult) {
@@ -121,6 +114,7 @@ export class OrchestratorAgent {
     }
 
     // High performance local fallback
+    const qLower = query.toLowerCase();
     const localIntents = [
       { agent: 'FEE' as AgentType, phrase: 'total fee collected this semester', action: 'GET_AGGREGATE' },
       { agent: 'FEE' as AgentType, phrase: 'what is my pending fee balance', action: 'GET_SOLO' },
@@ -172,13 +166,9 @@ export class OrchestratorAgent {
 
   /**
    * Main Pipeline:
-   * Faculty/User Input -> Role Authorization -> Student Resolver -> Tier 1/2 Matcher -> Supabase Fee/Attendance Agent -> Output
+   * User Query -> Student Resolver (Supabase) -> Tier 1/2 Matcher -> Supabase Fee/Attendance Agent -> Clean Output
    */
-  public static async processQuery(
-    rawInput: string, 
-    userId: string = 'st-00', 
-    userRole: 'ADMIN' | 'FACULTY' | 'STUDENT' = 'ADMIN'
-  ): Promise<ChatMessageResponse> {
+  public static async processQuery(rawInput: string, userId: string = 'st-00'): Promise<ChatMessageResponse> {
     const sanitized = this.sanitizeInput(rawInput);
     if (!sanitized) {
       return {
@@ -188,22 +178,7 @@ export class OrchestratorAgent {
       };
     }
 
-    // Role-based Access Control (RBAC): Protect sensitive aggregate finances for Student roles
-    if (userRole === 'STUDENT') {
-      if (FEE_KEYWORDS.test(sanitized) && SCOPE_REGEX.AGGREGATE.test(sanitized)) {
-        return {
-          text: "🔒 **Access Restricted**: Institutional fee collection summaries and financial audits are restricted to Faculty and College Administrators. You can ask about your own fee status or attendance records.",
-          agent: 'ORCHESTRATOR',
-          confidenceTier: 'TIER_1_REGEX',
-          quickActions: [
-            { label: 'My Pending Fee', query: 'What is my pending fee balance?' },
-            { label: 'My Attendance Percentage', query: 'Show my current attendance' },
-          ]
-        };
-      }
-    }
-
-    // Step 1: Student Resolver (Asynchronously checks Supabase public.students + fallback)
+    // Step 1: Student Resolver (Queries Supabase public.students)
     const resolvedStudent = await StudentResolver.resolveAsync(sanitized);
 
     // Step 2: Extract Modifiers
@@ -295,22 +270,22 @@ export class OrchestratorAgent {
       return {
         text: `🤔 I couldn't match your query directly to our Fee or Attendance catalogs.\n\n` +
           `**Try asking one of these verified questions:**\n` +
-          `• 📋 *"What is Rahul's attendance for 2025-26?"*\n` +
-          `• 💳 *"What is Priya's pending fee balance in pdf?"*\n` +
+          `• 📋 *"What is Rahul's attendance?"*\n` +
+          `• 💳 *"What is Rahul's pending fee?"*\n` +
           `• 📈 *"Class-wise attendance percentage report as excel"*\n` +
           `• 📊 *"Total fees collected this semester"*`,
         agent: 'ORCHESTRATOR',
         confidenceTier: 'TIER_3_FALLBACK',
         quickActions: [
-          { label: "Rahul's Attendance 2025-26", query: "What is Rahul's attendance for 2025-26?" },
+          { label: "Rahul's Attendance", query: "What is Rahul's attendance?" },
+          { label: "Rahul's Pending Fee", query: "What is Rahul's pending fee?" },
           { label: "Total Students Count", query: "Total students in college" },
-          { label: "Odd Sem Fee Summary", query: "Total fees collected odd sem" },
         ]
       };
     } catch (err: any) {
       console.error('[Orchestrator Error]:', err);
       return {
-        text: 'An error occurred while executing the agent query.',
+        text: 'An error occurred while executing the query.',
         agent: 'ORCHESTRATOR',
         confidenceTier: 'TIER_3_FALLBACK',
         error: true
