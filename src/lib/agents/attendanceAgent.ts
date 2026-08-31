@@ -1,4 +1,5 @@
-import { ATTENDANCE_RECORDS, AttendanceRecord } from '../mockDatabase';
+import { AttendanceRecord } from '../mockDatabase';
+import { AttendanceService } from '../../backend/services/attendanceService';
 import { ExportDataPayload } from '../exportUtils';
 import { TimePeriodType, QueryScopeType, ExportFormatType } from './feeAgent';
 import { ResolvedStudent } from '../studentResolver';
@@ -37,10 +38,10 @@ export interface AttendanceAgentResult {
 export class AttendanceAgent {
   /**
    * Core Attendance Calculation Pipeline:
-   * Faculty/User -> Orchestrator -> Student Resolver -> Attendance Agent -> PostgreSQL DB
-   * Formula: {time period (solo or aggregate)} + {DB data (solo or aggregate)} + intent (what user wants [.pdf / .xlsx / .docs / answer])
+   * Faculty/User -> Orchestrator -> Student Resolver -> Attendance Agent -> Supabase DB (student_attendance_summary view)
+   * Formula: {time period} + {DB data} + {intent [.pdf / .xlsx / .docs / answer]}
    */
-  public static execute(ctx: AttendanceAgentContext): AttendanceAgentResult {
+  public static async execute(ctx: AttendanceAgentContext): Promise<AttendanceAgentResult> {
     let periodLabel = 'Academic Year 2025-26';
     if (ctx.period === 'ODD_SEM' || ctx.period === 'CURRENT_SEM') {
       periodLabel = 'Odd Semester (2025-26)';
@@ -50,33 +51,12 @@ export class AttendanceAgent {
       periodLabel = 'Academic Session 2025-26';
     }
 
-    let matchingRecords = [...ATTENDANCE_RECORDS];
-
-    if (ctx.targetCourse) {
-      matchingRecords = matchingRecords.filter(r => 
-        r.course.toLowerCase().includes(ctx.targetCourse!.toLowerCase())
-      );
-    }
-
-    if (ctx.targetSubject) {
-      matchingRecords = matchingRecords.filter(r => 
-        r.subject.toLowerCase().includes(ctx.targetSubject!.toLowerCase())
-      );
-    }
-
     // 1. SOLO Student Inquiries (via Student Resolver or Target Student Name)
-    const targetStudentId = ctx.resolvedStudent?.id;
+    const targetStudentId = ctx.resolvedStudent?.id || (ctx.resolvedStudent as any)?.rollNumber;
     const targetStudentName = ctx.resolvedStudent?.name || ctx.targetStudent;
 
     if (ctx.scope === 'SOLO' || targetStudentName || targetStudentId) {
-      const record = targetStudentId
-        ? matchingRecords.find(r => r.studentId === targetStudentId)
-        : targetStudentName
-        ? matchingRecords.find(r => 
-            r.studentName.toLowerCase().includes(targetStudentName.toLowerCase()) ||
-            r.studentId.toLowerCase() === targetStudentName.toLowerCase()
-          )
-        : matchingRecords[0]; // Default student
+      const record = await AttendanceService.getStudentAttendance(targetStudentId, targetStudentName);
 
       if (!record) {
         return {
@@ -144,29 +124,22 @@ export class AttendanceAgent {
     }
 
     // 2. AGGREGATE Class-Wise / Department / College Inquiries
-    const totalClassesSum = matchingRecords.reduce((acc, r) => acc + r.totalClasses, 0);
-    const attendedClassesSum = matchingRecords.reduce((acc, r) => acc + r.attendedClasses, 0);
-    const avgPct = totalClassesSum > 0 
-      ? ((attendedClassesSum / totalClassesSum) * 100).toFixed(2) 
-      : '0.00';
-
-    const eligibleCount = matchingRecords.filter(r => r.attendancePct >= 75.0).length;
-    const shortageCount = matchingRecords.length - eligibleCount;
+    const aggregate = await AttendanceService.getAggregateAttendance(ctx.targetCourse);
 
     let text = `📈 **Class-Wise & Aggregate Attendance Analysis [${periodLabel}]**\n\n` +
-      `• **Overall Institutional Average:** **${avgPct}%**\n` +
-      `• **Total Class Sessions Logged:** ${totalClassesSum} hours\n` +
-      `• **Eligible Students (>= 75%):** ${eligibleCount} students\n` +
-      `• **Attendance Shortage (< 75%):** ${shortageCount} students\n\n` +
+      `• **Overall Institutional Average:** **${aggregate.avgPercentage}%**\n` +
+      `• **Total Class Sessions Logged:** ${aggregate.totalClasses} hours\n` +
+      `• **Eligible Students (>= 75%):** ${aggregate.eligibleCount} students\n` +
+      `• **Attendance Shortage (< 75%):** ${aggregate.shortageCount} students\n\n` +
       `**Class Breakdown:**\n`;
 
-    matchingRecords.forEach(r => {
+    aggregate.records.slice(0, 10).forEach(r => {
       const badge = r.attendancePct >= 75 ? '🟢' : '🔴';
       text += `• ${badge} **${r.studentName}** (${r.course}): ${r.attendancePct}% [${r.subject}]\n`;
     });
 
     const headers = ['Student Name', 'Course', 'Subject', 'Classes', 'Attended', 'Attendance %', 'Status'];
-    const rows = matchingRecords.map(r => [
+    const rows = aggregate.records.map(r => [
       r.studentName,
       r.course,
       r.subject,
@@ -183,10 +156,10 @@ export class AttendanceAgent {
         subtitle: `Technical Team College Academic Council`,
         generatedDate: new Date().toLocaleDateString('en-US', { dateStyle: 'long' }),
         summaryStats: [
-          { label: 'Overall Average', value: `${avgPct}%` },
-          { label: 'Eligible Students', value: eligibleCount },
-          { label: 'Shortage Students', value: shortageCount },
-          { label: 'Total Classes', value: totalClassesSum },
+          { label: 'Overall Average', value: `${aggregate.avgPercentage}%` },
+          { label: 'Eligible Students', value: aggregate.eligibleCount },
+          { label: 'Shortage Students', value: aggregate.shortageCount },
+          { label: 'Total Classes', value: aggregate.totalClasses },
         ],
         headers,
         rows,
@@ -198,11 +171,11 @@ export class AttendanceAgent {
       text,
       agent: 'ATTENDANCE',
       summary: {
-        avgAttendance: `${avgPct}%`,
-        totalClasses: totalClassesSum,
-        attendedClasses: attendedClassesSum,
-        eligibleCount,
-        shortageCount,
+        avgAttendance: `${aggregate.avgPercentage}%`,
+        totalClasses: aggregate.totalClasses,
+        attendedClasses: aggregate.attendedClasses,
+        eligibleCount: aggregate.eligibleCount,
+        shortageCount: aggregate.shortageCount,
       },
       tableData: {
         headers,

@@ -26,7 +26,7 @@ export interface ChatMessageResponse {
 }
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || '';
 const supabase = supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey) : null;
 
 // =========================================================
@@ -44,7 +44,7 @@ const FORMAT_REGEX = {
   DOCS: /\b(doc|docx|word|word doc|text doc)\b/i,
 };
 
-// Period Intent Extractors (including 2025-26, odd, even)
+// Period Intent Extractors
 const PERIOD_REGEX = {
   YEAR_25_26: /\b(2025-26|2025-2026|2025|2026)\b/i,
   ODD: /\b(odd|odd sem|odd semester|current sem|this sem|current semester|sem 1|sem 3|sem 5|sem 7)\b/i,
@@ -172,7 +172,7 @@ export class OrchestratorAgent {
 
   /**
    * Main Pipeline:
-   * Faculty/User Input -> Sanitization -> Student Resolver -> Tier 1/2 Matcher -> Fee/Attendance Agent -> DB Output
+   * Faculty/User Input -> Sanitization -> Student Resolver -> Tier 1/2 Matcher -> Supabase Fee/Attendance Agent -> Output
    */
   public static async processQuery(rawInput: string, userId: string = 'st-00'): Promise<ChatMessageResponse> {
     const sanitized = this.sanitizeInput(rawInput);
@@ -184,8 +184,8 @@ export class OrchestratorAgent {
       };
     }
 
-    // Step 1: Student Resolver (Identifies entities like 'Rahul', 'Aditya', '2025CSE019')
-    const resolvedStudent = StudentResolver.resolve(sanitized);
+    // Step 1: Student Resolver (Asynchronously checks Supabase public.students + fallback)
+    const resolvedStudent = await StudentResolver.resolveAsync(sanitized);
 
     // Step 2: Extract Modifiers
     const format = this.extractFormat(sanitized);
@@ -212,7 +212,6 @@ export class OrchestratorAgent {
         targetAgent = fuzzyMatch.agent;
         confidenceTier = 'TIER_2_FUZZY';
       } else if (resolvedStudent) {
-        // If student is identified without explicit keyword, default to Attendance/Overview
         targetAgent = 'ATTENDANCE';
         confidenceTier = 'TIER_1_REGEX';
       }
@@ -221,7 +220,7 @@ export class OrchestratorAgent {
     // Step 5: Delegate to Specialized Sub-Agents
     try {
       if (targetAgent === 'ATTENDANCE') {
-        const result = AttendanceAgent.execute({
+        const result = await AttendanceAgent.execute({
           userId,
           period,
           scope,
@@ -243,7 +242,7 @@ export class OrchestratorAgent {
       }
 
       if (targetAgent === 'FEE') {
-        const result = FeeAgent.execute({
+        const result = await FeeAgent.execute({
           userId,
           period,
           scope,

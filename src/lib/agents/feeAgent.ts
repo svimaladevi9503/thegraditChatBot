@@ -1,4 +1,5 @@
-import { FEE_RECORDS, FeeRecord } from '../mockDatabase';
+import { FeeRecord } from '../mockDatabase';
+import { FeeService } from '../../backend/services/feeService';
 import { ExportDataPayload } from '../exportUtils';
 import { ResolvedStudent } from '../studentResolver';
 
@@ -39,9 +40,10 @@ export interface FeeAgentResult {
 export class FeeAgent {
   /**
    * Core Fee Calculation Formula:
-   * {time period (solo or aggregate)} + {DB data (solo or aggregate)} + intent (what the user wants [.pdf / .xlsx / .docs])
+   * Faculty/User -> Orchestrator -> Student Resolver -> Fee Agent -> Supabase DB (student_fee_summary view)
+   * Formula: {time period} + {DB data} + {intent [.pdf / .xlsx / .docs / answer]}
    */
-  public static execute(ctx: FeeAgentContext): FeeAgentResult {
+  public static async execute(ctx: FeeAgentContext): Promise<FeeAgentResult> {
     let periodLabel = 'Academic Year 2025-26';
     if (ctx.period === 'ODD_SEM' || ctx.period === 'CURRENT_SEM') {
       periodLabel = 'Odd Semester 2025-26';
@@ -49,32 +51,12 @@ export class FeeAgent {
       periodLabel = 'Even Semester 2025-26';
     }
 
-    // Filter DB data according to period and target filters
-    let matchingRecords = [...FEE_RECORDS];
-
-    if (ctx.targetCourse) {
-      matchingRecords = matchingRecords.filter(r => 
-        r.course.toLowerCase().includes(ctx.targetCourse!.toLowerCase())
-      );
-    }
-
-    if (ctx.scope === 'OVERDUE') {
-      matchingRecords = matchingRecords.filter(r => r.status === 'OVERDUE' || r.status === 'PENDING');
-    }
-
     // 1. SOLO Student Query
-    const targetStudentId = ctx.resolvedStudent?.id;
+    const targetStudentId = ctx.resolvedStudent?.id || (ctx.resolvedStudent as any)?.rollNumber;
     const targetStudentName = ctx.resolvedStudent?.name || ctx.targetStudent;
 
     if (ctx.scope === 'SOLO' || targetStudentName || targetStudentId) {
-      const studentMatch = targetStudentId
-        ? matchingRecords.find(r => r.studentId === targetStudentId)
-        : targetStudentName
-        ? matchingRecords.find(r => 
-            r.studentName.toLowerCase().includes(targetStudentName.toLowerCase()) || 
-            r.studentId.toLowerCase() === targetStudentName.toLowerCase()
-          )
-        : matchingRecords[0];
+      const studentMatch = await FeeService.getStudentFee(targetStudentId, targetStudentName);
 
       if (!studentMatch) {
         return {
@@ -85,7 +67,7 @@ export class FeeAgent {
 
       const statusBadge = studentMatch.status === 'PAID' ? 'Fully Paid' : `Pending Due: ₹${studentMatch.dueAmount.toLocaleString('en-IN')}`;
       let text = `💳 **Fee Status for ${studentMatch.studentName} (${studentMatch.course})**\n\n` +
-        `• **Roll Number:** ${ctx.resolvedStudent?.rollNumber || studentMatch.studentId}\n` +
+        `• **Roll / Student ID:** ${ctx.resolvedStudent?.rollNumber || studentMatch.studentId}\n` +
         `• **Academic Period:** ${periodLabel}\n` +
         `• **Total Course Fee:** ₹${studentMatch.totalFee.toLocaleString('en-IN')}\n` +
         `• **Paid Amount:** ₹${studentMatch.paidAmount.toLocaleString('en-IN')}\n` +
@@ -132,7 +114,7 @@ export class FeeAgent {
           totalFee: studentMatch.totalFee,
           paidAmount: studentMatch.paidAmount,
           dueAmount: studentMatch.dueAmount,
-          collectionRate: `${((studentMatch.paidAmount / studentMatch.totalFee) * 100).toFixed(1)}%`,
+          collectionRate: `${studentMatch.totalFee > 0 ? ((studentMatch.paidAmount / studentMatch.totalFee) * 100).toFixed(1) : '100'}%`,
           studentCount: 1,
         },
         exportPayload,
@@ -141,20 +123,17 @@ export class FeeAgent {
     }
 
     // 2. AGGREGATE College / Department Query
-    const totalFee = matchingRecords.reduce((acc, r) => acc + r.totalFee, 0);
-    const paidAmount = matchingRecords.reduce((acc, r) => acc + r.paidAmount, 0);
-    const dueAmount = matchingRecords.reduce((acc, r) => acc + r.dueAmount, 0);
-    const collectionRate = totalFee > 0 ? ((paidAmount / totalFee) * 100).toFixed(1) : '0';
+    const aggregate = await FeeService.getAggregateFees(ctx.targetCourse);
 
     let text = `📊 **Fee Collection Summary [${periodLabel}]**\n\n` +
-      `• **Total Invoiced:** ₹${totalFee.toLocaleString('en-IN')}\n` +
-      `• **Total Collected (Paid):** ₹${paidAmount.toLocaleString('en-IN')}\n` +
-      `• **Total Outstanding (Due):** ₹${dueAmount.toLocaleString('en-IN')}\n` +
-      `• **Collection Rate:** ${collectionRate}%\n` +
-      `• **Total Records Analyzed:** ${matchingRecords.length} student records\n\n`;
+      `• **Total Invoiced:** ₹${aggregate.totalFee.toLocaleString('en-IN')}\n` +
+      `• **Total Collected (Paid):** ₹${aggregate.paidAmount.toLocaleString('en-IN')}\n` +
+      `• **Total Outstanding (Due):** ₹${aggregate.dueAmount.toLocaleString('en-IN')}\n` +
+      `• **Collection Rate:** ${aggregate.collectionRate}\n` +
+      `• **Total Records Analyzed:** ${aggregate.records.length} student records\n\n`;
 
     const headers = ['Student Name', 'Course', 'Total Fee (₹)', 'Paid (₹)', 'Due (₹)', 'Status'];
-    const rows = matchingRecords.map(r => [
+    const rows = aggregate.records.map(r => [
       r.studentName,
       r.course,
       r.totalFee.toLocaleString('en-IN'),
@@ -170,10 +149,10 @@ export class FeeAgent {
         subtitle: `Technical Team College Institutional Audit`,
         generatedDate: new Date().toLocaleDateString('en-US', { dateStyle: 'long' }),
         summaryStats: [
-          { label: 'Total Invoiced', value: `₹${totalFee.toLocaleString('en-IN')}` },
-          { label: 'Total Paid', value: `₹${paidAmount.toLocaleString('en-IN')}` },
-          { label: 'Outstanding Due', value: `₹${dueAmount.toLocaleString('en-IN')}` },
-          { label: 'Collection Rate', value: `${collectionRate}%` },
+          { label: 'Total Invoiced', value: `₹${aggregate.totalFee.toLocaleString('en-IN')}` },
+          { label: 'Total Paid', value: `₹${aggregate.paidAmount.toLocaleString('en-IN')}` },
+          { label: 'Outstanding Due', value: `₹${aggregate.dueAmount.toLocaleString('en-IN')}` },
+          { label: 'Collection Rate', value: aggregate.collectionRate },
         ],
         headers,
         rows,
@@ -185,11 +164,11 @@ export class FeeAgent {
       text,
       agent: 'FEE',
       summary: {
-        totalFee,
-        paidAmount,
-        dueAmount,
-        collectionRate: `${collectionRate}%`,
-        studentCount: matchingRecords.length,
+        totalFee: aggregate.totalFee,
+        paidAmount: aggregate.paidAmount,
+        dueAmount: aggregate.dueAmount,
+        collectionRate: aggregate.collectionRate,
+        studentCount: aggregate.records.length,
       },
       tableData: {
         headers,
