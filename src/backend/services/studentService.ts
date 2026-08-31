@@ -14,19 +14,28 @@ export interface SupabaseStudentRow {
   created_at?: string;
 }
 
+export interface StudentResolutionResult {
+  student: Student | null;
+  multipleMatches?: Student[];
+  isAmbiguous?: boolean;
+}
+
 const STOP_WORDS = new Set([
   'what', 'is', 'the', 'for', 'of', 'and', 'to', 'in', 'a', 'an', 'show', 'tell',
   'check', 'get', 'give', 'me', 'details', 'status', 'record', 'records', 'report',
   'attendance', 'fee', 'fees', 'pending', 'due', 'paid', 'total', 'my', 'student',
   'pdf', 'excel', 'xlsx', 'docx', 'doc', 'download', 'export', 'current', 'sem',
-  'semester', 'year', '2024', '2025', '2026', '2027', '2025-26', '2024-25', 'odd', 'even', 'how', 'much'
+  'semester', 'year', '2024', '2025', '2026', '2027', '2025-26', '2024-25', 'odd', 'even', 'how', 'much',
+  'overall', 'collection', 'summary', 'all', 'college', 'class', 'wise', 'list'
 ]);
+
+const useDemoData = process.env.NEXT_PUBLIC_USE_DEMO_DATA === 'true';
 
 export class StudentService {
   /**
    * Extract potential student name candidates from natural language query
    */
-  private static extractCandidates(query: string): string[] {
+  public static extractCandidates(query: string): string[] {
     const clean = query
       .replace(/['’]s\b/gi, '') // remove possessive 's
       .replace(/[<>"`\\]/g, ' ') // remove special chars
@@ -86,18 +95,18 @@ export class StudentService {
           }));
         }
       } catch (err) {
-        console.warn('StudentService: Supabase query failed, falling back:', err);
+        console.warn('StudentService: Supabase query error:', err);
       }
     }
 
-    return STUDENTS_DATA;
+    return useDemoData ? STUDENTS_DATA : [];
   }
 
   /**
-   * Find student by first name, full name, or roll number (student_id)
+   * Find student with ambiguity detection and strict zero-fake-data policy
    */
-  public static async findStudent(query: string): Promise<Student | null> {
-    if (!query) return null;
+  public static async findStudentDetailed(query: string): Promise<StudentResolutionResult> {
+    if (!query) return { student: null };
     const candidates = this.extractCandidates(query);
     const client = supabaseAdmin || supabase;
 
@@ -109,11 +118,10 @@ export class StudentService {
             .from('students')
             .select('id, student_id, first_name, last_name, email, department_id, class_id, admission_year, is_active')
             .or(`student_id.ilike.%${cand}%,first_name.ilike.%${cand}%,last_name.ilike.%${cand}%`)
-            .limit(1);
+            .limit(5);
 
           if (!error && data && data.length > 0) {
-            const d = data[0];
-            return {
+            const mapped: Student[] = data.map((d: SupabaseStudentRow) => ({
               id: d.id,
               rollNumber: d.student_id,
               name: `${d.first_name || ''} ${d.last_name || ''}`.trim(),
@@ -123,32 +131,55 @@ export class StudentService {
               academicYear: d.admission_year ? `${d.admission_year}-${Number(d.admission_year) + 1}` : '2025-26',
               email: d.email || '',
               phone: '',
-            };
+            }));
+
+            // Ambiguity check
+            if (mapped.length > 1) {
+              return {
+                student: null,
+                multipleMatches: mapped,
+                isAmbiguous: true,
+              };
+            }
+
+            return { student: mapped[0] };
           }
         }
       } catch (err) {
-        console.warn('StudentService.findStudent: Supabase error, using fallback:', err);
+        console.warn('StudentService.findStudent: Supabase error:', err);
       }
     }
 
-    // 2. In-Memory Fallback Matcher
-    const clean = query.toLowerCase();
-    const all = STUDENTS_DATA;
+    // 2. In-Memory Fallback ONLY when explicit flag NEXT_PUBLIC_USE_DEMO_DATA=true
+    if (useDemoData) {
+      const clean = query.toLowerCase();
+      const all = STUDENTS_DATA;
 
-    // Match by candidate tokens or direct roll/name
-    for (const cand of (candidates.length > 0 ? candidates : [query])) {
-      const cLower = cand.toLowerCase();
-      const match = all.find(s => 
-        s.rollNumber.toLowerCase().includes(cLower) ||
-        s.name.toLowerCase().includes(cLower) ||
-        s.name.split(' ')[0].toLowerCase() === cLower
-      );
-      if (match) return match;
+      for (const cand of (candidates.length > 0 ? candidates : [query])) {
+        const cLower = cand.toLowerCase();
+        const matches = all.filter(s => 
+          s.rollNumber.toLowerCase().includes(cLower) ||
+          s.name.toLowerCase().includes(cLower) ||
+          s.name.split(' ')[0].toLowerCase() === cLower
+        );
+        if (matches.length === 1) return { student: matches[0] };
+        if (matches.length > 1) return { student: null, multipleMatches: matches, isAmbiguous: true };
+      }
+
+      const byName = all.filter(s => clean.includes(s.name.toLowerCase()));
+      if (byName.length === 1) return { student: byName[0] };
+      if (byName.length > 1) return { student: null, multipleMatches: byName, isAmbiguous: true };
     }
 
-    const byName = all.find(s => clean.includes(s.name.toLowerCase()));
-    if (byName) return byName;
+    // Default: No matching record found (Strictly NO fake data injection)
+    return { student: null };
+  }
 
-    return null;
+  /**
+   * Find single student
+   */
+  public static async findStudent(query: string): Promise<Student | null> {
+    const result = await this.findStudentDetailed(query);
+    return result.student;
   }
 }

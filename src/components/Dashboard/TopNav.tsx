@@ -4,11 +4,11 @@ import React from 'react';
 import { Sparkles, LogOut, GraduationCap, ChevronDown } from 'lucide-react';
 
 interface TopNavProps {
-  onOpenChat: () => void;
-  chatOpen: boolean;
+  onOpenChat?: () => void;
+  chatOpen?: boolean;
 }
 
-export const TopNav: React.FC<TopNavProps> = ({ onOpenChat, chatOpen }) => {
+export const TopNav: React.FC<TopNavProps> = ({ onOpenChat, chatOpen = false }) => {
   return (
     <header className="bg-white border-b border-gray-100/80 px-6 py-3 flex items-center justify-between shadow-sm sticky top-0 z-30">
       {/* Left side: Logo & College Name */}

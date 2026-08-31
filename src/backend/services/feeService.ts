@@ -19,6 +19,8 @@ export interface StudentFeeSummaryRow {
   due_date?: string;
 }
 
+const useDemoData = process.env.NEXT_PUBLIC_USE_DEMO_DATA === 'true';
+
 export class FeeService {
   /**
    * Fetch all fee records preferring `public.student_fee_summary` view
@@ -74,12 +76,11 @@ export class FeeService {
           });
         }
       } catch (err) {
-        console.warn('FeeService: Supabase query error, using in-memory dataset:', err);
+        console.warn('FeeService: Supabase query error:', err);
       }
     }
 
-    // In-Memory Fallback
-    return FEE_RECORDS;
+    return useDemoData ? FEE_RECORDS : [];
   }
 
   /**
@@ -118,22 +119,25 @@ export class FeeService {
           };
         }
       } catch (err) {
-        console.warn('FeeService.getStudentFee: Fallback to local:', err);
+        console.warn('FeeService.getStudentFee: Supabase query error:', err);
       }
     }
 
-    // Local Fallback
-    const all = await this.getAllFeeRecords();
-    if (studentId) {
-      const match = all.find(r => r.studentId === studentId);
-      if (match) return match;
+    // Demo fallback ONLY if explicit flag enabled
+    if (useDemoData) {
+      const all = FEE_RECORDS;
+      if (studentId) {
+        const match = all.find(r => r.studentId === studentId);
+        if (match) return match;
+      }
+      if (studentName) {
+        const clean = studentName.toLowerCase();
+        const match = all.find(r => r.studentName.toLowerCase().includes(clean));
+        if (match) return match;
+      }
     }
-    if (studentName) {
-      const clean = studentName.toLowerCase();
-      const match = all.find(r => r.studentName.toLowerCase().includes(clean));
-      if (match) return match;
-    }
-    return all[0] || null;
+
+    return null;
   }
 
   /**

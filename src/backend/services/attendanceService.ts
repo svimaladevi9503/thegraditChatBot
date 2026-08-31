@@ -16,6 +16,8 @@ export interface StudentAttendanceSummaryRow {
   attendance_percentage: number;
 }
 
+const useDemoData = process.env.NEXT_PUBLIC_USE_DEMO_DATA === 'true';
+
 export class AttendanceService {
   /**
    * Fetch attendance records preferring the live `public.student_attendance_summary` view
@@ -64,12 +66,11 @@ export class AttendanceService {
           }));
         }
       } catch (err) {
-        console.warn('AttendanceService: Supabase query error, using in-memory dataset:', err);
+        console.warn('AttendanceService: Supabase query error:', err);
       }
     }
 
-    // In-Memory Fallback
-    return ATTENDANCE_RECORDS;
+    return useDemoData ? ATTENDANCE_RECORDS : [];
   }
 
   /**
@@ -104,22 +105,25 @@ export class AttendanceService {
           };
         }
       } catch (err) {
-        console.warn('AttendanceService.getStudentAttendance: Fallback to local:', err);
+        console.warn('AttendanceService.getStudentAttendance: Supabase query error:', err);
       }
     }
 
-    // Local Fallback
-    const all = await this.getAllAttendance();
-    if (studentId) {
-      const match = all.find(r => r.studentId === studentId);
-      if (match) return match;
+    // Demo fallback ONLY if explicit flag enabled
+    if (useDemoData) {
+      const all = ATTENDANCE_RECORDS;
+      if (studentId) {
+        const match = all.find(r => r.studentId === studentId);
+        if (match) return match;
+      }
+      if (studentName) {
+        const clean = studentName.toLowerCase();
+        const match = all.find(r => r.studentName.toLowerCase().includes(clean));
+        if (match) return match;
+      }
     }
-    if (studentName) {
-      const clean = studentName.toLowerCase();
-      const match = all.find(r => r.studentName.toLowerCase().includes(clean));
-      if (match) return match;
-    }
-    return all[0] || null;
+
+    return null;
   }
 
   /**

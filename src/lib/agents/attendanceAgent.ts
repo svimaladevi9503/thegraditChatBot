@@ -60,7 +60,9 @@ export class AttendanceAgent {
 
       if (!record) {
         return {
-          text: `No attendance records found for student "${targetStudentName || 'specified'}" in ${periodLabel}.`,
+          text: targetStudentName
+            ? `No matching student records were found for "${targetStudentName}".`
+            : "No matching student records were found.",
           agent: 'ATTENDANCE'
         };
       }

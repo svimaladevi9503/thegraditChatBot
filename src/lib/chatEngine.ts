@@ -2,6 +2,7 @@ import { FeeAgent, FeeAgentResult, TimePeriodType, QueryScopeType, ExportFormatT
 import { AttendanceAgent, AttendanceAgentResult } from './agents/attendanceAgent';
 import { MiscAgent, MiscAgentResult } from './agents/miscAgent';
 import { StudentResolver, ResolvedStudent } from './studentResolver';
+import { StudentService } from '../backend/services/studentService';
 import { IntentService } from '../backend/services/intentService';
 import { ExportDataPayload } from './exportUtils';
 
@@ -179,12 +180,42 @@ export class OrchestratorAgent {
     }
 
     // Step 1: Student Resolver (Queries Supabase public.students)
-    const resolvedStudent = await StudentResolver.resolveAsync(sanitized);
+    const detailedResolution = await StudentResolver.resolveDetailed(sanitized);
+
+    // If multiple students match (Ambiguous Student State)
+    if (detailedResolution.isAmbiguous && detailedResolution.multipleMatches && detailedResolution.multipleMatches.length > 1) {
+      const name = detailedResolution.multipleMatches[0].name.split(' ')[0];
+      let ambText = `I found multiple students named ${name}.\n\nPlease select the correct student:\n\n`;
+      const quickActions: { label: string; query: string }[] = [];
+
+      detailedResolution.multipleMatches.forEach(st => {
+        ambText += `• **${st.name}** — \`${st.rollNumber}\` (${st.course})\n`;
+        const intentSuffix = ATTENDANCE_KEYWORDS.test(sanitized) ? 'attendance' : FEE_KEYWORDS.test(sanitized) ? 'fee' : 'details';
+        quickActions.push({
+          label: `${st.name} (${st.rollNumber})`,
+          query: `Show ${st.rollNumber} ${intentSuffix}`,
+        });
+      });
+
+      return {
+        text: ambText,
+        agent: 'ORCHESTRATOR',
+        confidenceTier: 'TIER_1_REGEX',
+        quickActions,
+      };
+    }
+
+    const resolvedStudent = detailedResolution.resolvedStudent;
+    const candidates = StudentService.extractCandidates(sanitized);
+    
+    // Check if query is looking for a specific individual
+    const isExplicitSolo = /['’]s|\bfor\b|\bof\b|\bstudent\b/i.test(sanitized);
+    const targetStudent = resolvedStudent ? resolvedStudent.name : isExplicitSolo && candidates.length > 0 ? candidates[0] : undefined;
 
     // Step 2: Extract Modifiers
     const format = this.extractFormat(sanitized);
     const period = this.extractPeriod(sanitized);
-    const scope = this.extractScope(sanitized, Boolean(resolvedStudent));
+    const scope = this.extractScope(sanitized, Boolean(resolvedStudent || targetStudent));
     const targetCourse = this.extractCourse(sanitized);
 
     // Step 3: Tier 1 Regex Matching
@@ -205,7 +236,7 @@ export class OrchestratorAgent {
       if (fuzzyMatch) {
         targetAgent = fuzzyMatch.agent;
         confidenceTier = 'TIER_2_FUZZY';
-      } else if (resolvedStudent) {
+      } else if (resolvedStudent || targetStudent) {
         targetAgent = 'ATTENDANCE';
         confidenceTier = 'TIER_1_REGEX';
       }
@@ -219,6 +250,7 @@ export class OrchestratorAgent {
           period,
           scope,
           resolvedStudent,
+          targetStudent,
           targetCourse,
           format,
           rawQuery: sanitized
@@ -241,6 +273,7 @@ export class OrchestratorAgent {
           period,
           scope,
           resolvedStudent,
+          targetStudent,
           targetCourse,
           format,
           rawQuery: sanitized

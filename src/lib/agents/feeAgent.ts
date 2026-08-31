@@ -60,7 +60,9 @@ export class FeeAgent {
 
       if (!studentMatch) {
         return {
-          text: `No fee records found for "${targetStudentName || 'specified student'}" in ${periodLabel}.`,
+          text: targetStudentName
+            ? `No matching student records were found for "${targetStudentName}".`
+            : "No matching student records were found.",
           agent: 'FEE'
         };
       }
