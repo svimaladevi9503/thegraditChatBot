@@ -42,11 +42,11 @@ const STOP_WORDS = new Set([
   'tuition', 'installment', 'scholarship', 'payment', 'payments', 'balance', 'vs'
 ]);
 
-// Lightweight defensive candidate extraction regex patterns
-const ROLL_NUMBER_REGEX = /\b(?:\d{4}[A-Z]{2,4}\d{2,4}|ST-?\d+|[A-Z]{2,4}\d{3,6}|\d{2,4}[A-Z]{2,4}\d*)\b/gi;
-const POSSESSIVE_REGEX = /\b([A-Z][a-z]{1,}|[a-z]{3,})['’]s\b/gi;
-const TWO_WORD_NAME_REGEX = /\b([A-Z][a-z]{2,}\s+[A-Z][a-z]{2,})\b/g;
-const CONTEXTUAL_NAME_REGEX = /(?:student|for|of|about|named)\s+([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})?)/gi;
+// Lightweight defensive candidate extraction regex patterns (Case-Insensitive)
+const ROLL_NUMBER_REGEX = /\b(?:\d{4}[a-z]{2,4}\d{2,4}|st-?\d+|[a-z]{2,4}\d{3,6}|\d{2,4}[a-z]{2,4}\d*)\b/gi;
+const POSSESSIVE_REGEX = /\b([a-z]{2,})['’]s\b/gi;
+const TWO_WORD_NAME_REGEX = /\b([a-z]{2,}\s+[a-z]{2,})\b/gi;
+const CONTEXTUAL_NAME_REGEX = /(?:student|for|of|about|named)\s+([a-z]{2,}(?:\s+[a-z]{2,})?)/gi;
 
 export class StudentService {
   /**

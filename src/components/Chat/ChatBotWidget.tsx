@@ -82,6 +82,7 @@ export const ChatBotWidget: React.FC = () => {
         content: '⚠️ Unable to access student records right now.\n\nPlease try again in a moment.',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         response: {
+          success: false,
           text: '⚠️ Unable to access student records right now. Please try again in a moment.',
           agent: 'ORCHESTRATOR',
           confidenceTier: 'TIER_3_FALLBACK',

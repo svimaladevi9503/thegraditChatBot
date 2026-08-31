@@ -24,9 +24,11 @@ export type QueryIntentCategory =
   | 'UNKNOWN';
 
 export interface ChatMessageResponse {
+  success: boolean;
   text: string;
   agent: AgentType;
   confidenceTier: 'TIER_1_REGEX' | 'TIER_2_FUZZY' | 'TIER_3_FALLBACK';
+  resolutionStatus?: 'RESOLVED' | 'AMBIGUOUS' | 'NOT_FOUND' | 'CONNECTION_ERROR';
   resolvedStudent?: {
     id: string;
     name: string;
@@ -34,9 +36,12 @@ export interface ChatMessageResponse {
     department?: string;
     class?: string;
   };
+  data?: any;
+  suggestions?: { label: string; query: string }[];
+  quickActions?: { label: string; query: string }[];
+  errorType?: 'NOT_FOUND' | 'CONNECTION_ERROR' | null;
   exportPayload?: any;
   exportFormat?: ExportFormatType;
-  quickActions?: { label: string; query: string }[];
   error?: boolean;
 }
 
@@ -51,11 +56,11 @@ const INDIVIDUAL_FEE_KEYWORDS = /\b(fee|fees|paid|due|dues|balance|pending|recei
 const MISC_KEYWORDS = /\b(help|what can you do|commands|options|hello|hi|hey|greetings|clear|who are you|reset)\b/i;
 const SHOW_MORE_REGEX = /\b(show more|list all|all .* students|show all .* students|more for)\b/i;
 
-// Explicit Student Evidence Patterns
-const ROLL_NUMBER_REGEX = /\b(?:\d{4}[A-Z]{2,4}\d{2,4}|ST-?\d+|[A-Z]{2,4}\d{3,6}|\d{2,4}[A-Z]{2,4}\d*)\b/i;
-const POSSESSIVE_REGEX = /\b[A-Za-z]{2,}['’]s\b/i;
-const TWO_WORD_NAME_REGEX = /\b[A-Z][a-z]{2,}\s+[A-Z][a-z]{2,}\b/;
-const CONTEXTUAL_PREP_REGEX = /\b(?:student|for|of|about|named)\s+[A-Z][a-z]{2,}\b/i;
+// Explicit Student Evidence Patterns (Case-Insensitive)
+const ROLL_NUMBER_REGEX = /\b(?:\d{4}[a-z]{2,4}\d{2,4}|st-?\d+|[a-z]{2,4}\d{3,6}|\d{2,4}[a-z]{2,4}\d*)\b/i;
+const POSSESSIVE_REGEX = /\b[a-z]{2,}['’]s\b/i;
+const TWO_WORD_NAME_REGEX = /\b[a-z]{2,}\s+[a-z]{2,}\b/i;
+const CONTEXTUAL_PREP_REGEX = /\b(?:student|for|of|about|named)\s+[a-z]{2,}\b/i;
 
 // Department & Course Extraction
 const COURSE_PATTERNS: Record<string, RegExp> = {
@@ -164,6 +169,7 @@ export class OrchestratorAgent {
 
     if (!sanitized) {
       return {
+        success: true,
         text: "Please ask a question regarding fees, attendance, or student records.",
         agent: 'ORCHESTRATOR',
         confidenceTier: 'TIER_1_REGEX'
@@ -187,10 +193,14 @@ export class OrchestratorAgent {
       });
 
       return {
+        success: !result.text.startsWith('⚠️'),
         text: result.text,
         agent: 'COLLECTIVE_ATTENDANCE',
         confidenceTier: 'TIER_1_REGEX',
+        data: result.summary,
+        suggestions: result.quickActions,
         quickActions: result.quickActions,
+        errorType: result.text.startsWith('⚠️') ? 'CONNECTION_ERROR' : null,
       };
     }
 
@@ -202,15 +212,20 @@ export class OrchestratorAgent {
       });
 
       return {
+        success: !result.text.startsWith('⚠️'),
         text: result.text,
         agent: 'COLLECTIVE_FEE',
         confidenceTier: 'TIER_1_REGEX',
+        data: result.summary,
+        suggestions: result.quickActions,
         quickActions: result.quickActions,
+        errorType: result.text.startsWith('⚠️') ? 'CONNECTION_ERROR' : null,
       };
     }
 
     if (intent === 'MISC') {
       return {
+        success: true,
         text: "👋 **GRADit Assistant Capabilities:**\n\n" +
           "• **Individual Attendance:** *\"Rahul's attendance\"* or *\"Show attendance for 2025CSE019\"*\n" +
           "• **Individual Fees:** *\"What is Rahul's pending fee?\"*\n" +
@@ -234,6 +249,9 @@ export class OrchestratorAgent {
       // Case A: CONNECTION_ERROR
       if (resolution.status === 'CONNECTION_ERROR') {
         return {
+          success: false,
+          errorType: 'CONNECTION_ERROR',
+          resolutionStatus: 'CONNECTION_ERROR',
           text: "⚠️ Unable to access student records right now. Please try again in a moment.",
           agent: 'ORCHESTRATOR',
           confidenceTier: 'TIER_1_REGEX',
@@ -265,9 +283,12 @@ export class OrchestratorAgent {
           remText += `\nPlease select the student you mean.`;
 
           return {
+            success: true,
+            resolutionStatus: 'AMBIGUOUS',
             text: remText,
             agent: 'ORCHESTRATOR',
             confidenceTier: 'TIER_1_REGEX',
+            suggestions: remQuickActions,
             quickActions: remQuickActions,
           };
         }
@@ -302,9 +323,12 @@ export class OrchestratorAgent {
 
         // Hard safety check: Ambiguous result NEVER reaches AttendanceAgent or FeeAgent
         return {
+          success: true,
+          resolutionStatus: 'AMBIGUOUS',
           text: ambText,
           agent: 'ORCHESTRATOR',
           confidenceTier: 'TIER_1_REGEX',
+          suggestions: quickActions,
           quickActions,
         };
       }
@@ -312,6 +336,9 @@ export class OrchestratorAgent {
       // Case C: NOT_FOUND for individual student search
       if (resolution.status === 'NOT_FOUND') {
         return {
+          success: false,
+          errorType: 'NOT_FOUND',
+          resolutionStatus: 'NOT_FOUND',
           text: "I couldn't find a student matching that name.",
           agent: isAttendanceIntent ? 'ATTENDANCE' : isFeeIntent ? 'FEE' : 'ORCHESTRATOR',
           confidenceTier: 'TIER_1_REGEX',
@@ -349,10 +376,13 @@ export class OrchestratorAgent {
           });
 
           return {
+            success: !result.text.startsWith('⚠️') && !result.text.includes("couldn't find"),
             text: result.text,
             agent: 'ATTENDANCE',
             confidenceTier: 'TIER_1_REGEX',
+            resolutionStatus: 'RESOLVED',
             resolvedStudent,
+            data: result.summary,
             exportPayload: result.exportPayload,
             exportFormat: result.exportFormat
           };
@@ -379,10 +409,13 @@ export class OrchestratorAgent {
           });
 
           return {
+            success: !result.text.startsWith('⚠️') && !result.text.includes("couldn't find"),
             text: result.text,
             agent: 'FEE',
             confidenceTier: 'TIER_1_REGEX',
+            resolutionStatus: 'RESOLVED',
             resolvedStudent,
+            data: result.summary,
             exportPayload: result.exportPayload,
             exportFormat: result.exportFormat
           };
@@ -390,6 +423,8 @@ export class OrchestratorAgent {
       } catch (err: any) {
         console.error('[Orchestrator] Execution Error:', err);
         return {
+          success: false,
+          errorType: 'CONNECTION_ERROR',
           text: "⚠️ Unable to access student records right now. Please try again in a moment.",
           agent: 'ORCHESTRATOR',
           confidenceTier: 'TIER_3_FALLBACK',
@@ -402,6 +437,7 @@ export class OrchestratorAgent {
     // 🔴 ROUTING PRIORITY 3 — GENERAL / UNKNOWN FALLBACK
     // =========================================================================
     return {
+      success: true,
       text: "I couldn't quite understand that query.\n\nYou can ask about:\n• Student attendance (e.g. *\"Rahul's attendance\"*)\n• Fee status (e.g. *\"Rahul's pending fee\"*)\n• Overall attendance (e.g. *\"Overall attendance\"*)\n• Fee summaries (e.g. *\"Show pending fees\"*)",
       agent: 'UNKNOWN',
       confidenceTier: 'TIER_3_FALLBACK'
