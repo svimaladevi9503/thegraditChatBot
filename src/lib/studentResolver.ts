@@ -1,4 +1,5 @@
 import { STUDENTS_DATA, Student } from './mockDatabase';
+import { StudentService } from '../backend/services/studentService';
 
 export interface ResolvedStudent {
   id: string;
@@ -11,6 +12,20 @@ export interface ResolvedStudent {
 }
 
 export class StudentResolver {
+  public static async resolveAsync(query: string): Promise<ResolvedStudent | null> {
+    const student = await StudentService.findStudent(query);
+    if (!student) return null;
+    return {
+      id: student.id,
+      name: student.name,
+      rollNumber: student.rollNumber,
+      course: student.course,
+      semester: student.semester,
+      academicYear: student.academicYear,
+      confidence: 0.95,
+    };
+  }
+
   /**
    * Identifies and resolves student entities from faculty or admin queries
    * Examples:

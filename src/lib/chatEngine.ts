@@ -3,6 +3,7 @@ import { FeeAgent, FeeAgentResult, TimePeriodType, QueryScopeType, ExportFormatT
 import { AttendanceAgent, AttendanceAgentResult } from './agents/attendanceAgent';
 import { MiscAgent, MiscAgentResult } from './agents/miscAgent';
 import { StudentResolver, ResolvedStudent } from './studentResolver';
+import { IntentService } from '../backend/services/intentService';
 import { ExportDataPayload } from './exportUtils';
 
 export type AgentType = 'ORCHESTRATOR' | 'FEE' | 'ATTENDANCE' | 'MISC' | 'UNKNOWN';
@@ -113,18 +114,10 @@ export class OrchestratorAgent {
   private static async matchIntentTier2(query: string): Promise<{ agent: AgentType; action: string } | null> {
     const qLower = query.toLowerCase();
 
-    if (supabase) {
-      try {
-        const { data, error } = await supabase.rpc('match_user_intent', { 
-          search_query: query,
-          similarity_threshold: 0.30 
-        });
-        if (!error && data && data.length > 0) {
-          return { agent: data[0].agent_type as AgentType, action: data[0].action_type };
-        }
-      } catch (err) {
-        console.warn('Supabase intent matching skipped:', err);
-      }
+    // 1. Try Supabase RPC via IntentService
+    const rpcResult = await IntentService.matchIntent(query, 0.30);
+    if (rpcResult) {
+      return rpcResult;
     }
 
     // High performance local fallback
