@@ -15,13 +15,15 @@ export interface DetailedResolverOutput {
   status: QueryStatus;
   resolvedStudent: ResolvedStudent | null;
   multipleMatches?: Student[];
+  totalMatchesCount?: number;
+  candidateSearched?: string;
   isAmbiguous?: boolean;
   errorMessage?: string;
 }
 
 export class StudentResolver {
   /**
-   * Detailed resolution supporting multiple ambiguous matches & 3-tier status
+   * Detailed resolution supporting regex matching, Top 3 ambiguous suggestions, and show more
    */
   public static async resolveDetailed(query: string): Promise<DetailedResolverOutput> {
     if (!query) return { status: 'NOT_FOUND', resolvedStudent: null };
@@ -31,7 +33,7 @@ export class StudentResolver {
       return {
         status: 'CONNECTION_ERROR',
         resolvedStudent: null,
-        errorMessage: res.errorMessage || "I'm unable to access student records right now. Please try again.",
+        errorMessage: res.errorMessage || "⚠️ Unable to access student records right now. Please try again in a moment.",
       };
     }
 
@@ -40,6 +42,8 @@ export class StudentResolver {
         status: 'SUCCESS',
         resolvedStudent: null,
         multipleMatches: res.multipleMatches,
+        totalMatchesCount: res.totalMatchesCount,
+        candidateSearched: res.candidateSearched,
         isAmbiguous: true,
       };
     }
