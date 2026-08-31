@@ -12,7 +12,7 @@ import {
   Cell 
 } from 'recharts';
 import { BarChart3, Radio } from 'lucide-react';
-import { COURSES_DATA } from '@/lib/mockDatabase';
+import { COURSES_DATA } from '../../lib/mockDatabase';
 
 export const CoursesChart: React.FC = () => {
   const chartData = COURSES_DATA.map(course => ({

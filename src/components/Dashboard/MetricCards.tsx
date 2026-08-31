@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { Users, GraduationCap, User, UserX } from 'lucide-react';
-import { COLLEGE_METRICS } from '@/lib/mockDatabase';
+import { COLLEGE_METRICS } from '../../lib/mockDatabase';
 
 export const MetricCards: React.FC = () => {
   const cards = [

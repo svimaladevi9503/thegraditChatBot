@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { AgentType } from '@/lib/chatEngine';
+import { AgentType } from '../../lib/chatEngine';
 
 interface AgentBadgeProps {
   agent: AgentType;

@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useState } from 'react';
-import { ExportDataPayload, exportToPDF, exportToExcel, exportToWord } from '@/lib/exportUtils';
-import { ExportFormatType } from '@/lib/agents/feeAgent';
+import { ExportDataPayload, exportToPDF, exportToExcel, exportToWord } from '../../lib/exportUtils';
+import { ExportFormatType } from '../../lib/agents/feeAgent';
 import { FileText, FileSpreadsheet, Download, CheckCircle2 } from 'lucide-react';
 
 interface ExportActionProps {

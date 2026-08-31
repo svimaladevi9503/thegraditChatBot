@@ -15,7 +15,7 @@ import {
   Clock,
   ArrowRight
 } from 'lucide-react';
-import { ChatMessageResponse, AgentType } from '@/lib/chatEngine';
+import { ChatMessageResponse, AgentType } from '../../lib/chatEngine';
 import { AgentBadge } from './AgentBadge';
 import { ExportAction } from './ExportAction';
 
