@@ -1,9 +1,27 @@
-import { StudentResolver, StudentResolutionContract, StudentMatchItem } from './studentResolver';
+import { StudentResolver, StudentResolutionContract } from './studentResolver';
 import { AttendanceAgent, AttendanceAgentResult } from './agents/attendanceAgent';
-import { FeeAgent, FeeAgentResult, TimePeriodType, QueryScopeType, ExportFormatType } from './agents/feeAgent';
+import { FeeAgent, FeeAgentResult, TimePeriodType, ExportFormatType } from './agents/feeAgent';
+import { CollectiveAttendanceAgent, CollectiveAttendanceResult } from './agents/collectiveAttendanceAgent';
+import { CollectiveFeeAgent, CollectiveFeeResult } from './agents/collectiveFeeAgent';
 import { StudentService } from '../backend/services/studentService';
 
-export type AgentType = 'ATTENDANCE' | 'FEE' | 'MISC' | 'ORCHESTRATOR' | 'UNKNOWN';
+export type AgentType = 
+  | 'ATTENDANCE' 
+  | 'FEE' 
+  | 'COLLECTIVE_ATTENDANCE' 
+  | 'COLLECTIVE_FEE' 
+  | 'ORCHESTRATOR' 
+  | 'MISC' 
+  | 'UNKNOWN';
+
+export type QueryIntentCategory =
+  | 'INDIVIDUAL_ATTENDANCE'
+  | 'INDIVIDUAL_FEE'
+  | 'COLLECTIVE_ATTENDANCE'
+  | 'COLLECTIVE_FEE'
+  | 'STUDENT_LOOKUP'
+  | 'MISC'
+  | 'UNKNOWN';
 
 export interface ChatMessageResponse {
   text: string;
@@ -22,37 +40,18 @@ export interface ChatMessageResponse {
   error?: boolean;
 }
 
-// 1. TIER 1 - DETERMINISTIC REGEX DICTIONARIES
-const ATTENDANCE_KEYWORDS = /\b(attendance|present|absent|shortage|classes|attended|bunk|eligibility|percentage|lectures|sessions)\b/i;
-const FEE_KEYWORDS = /\b(fee|fees|paid|due|dues|balance|pending|receipt|tuition|installment|scholarship|payment|statement|invoice)\b/i;
+// ----------------------------------------------------
+// TIER 1 - DETERMINISTIC REGEX DICTIONARIES
+// ----------------------------------------------------
+const COLLECTIVE_ATTENDANCE_REGEX = /\b(overall attendance|class wise attendance|class attendance|department attendance|students below 75|attendance shortage|shortage list|who is not eligible|eligible students|how many.*eligible|students eligible|average attendance|attendance summary|attendance report|attendance audit)\b/i;
+const COLLECTIVE_FEE_REGEX = /\b(total fees collected|total fee collected|overall fee|overall fees|fee collection|how much.*pending|students with pending|who has not paid|unpaid students|defaulter list|fee collection summary|total outstanding|paid vs pending|fee report|pending fee summary|pending dues summary)\b/i;
+
+const INDIVIDUAL_ATTENDANCE_KEYWORDS = /\b(attendance|present|absent|shortage|classes|attended|bunk|eligibility|percentage|lectures|sessions)\b/i;
+const INDIVIDUAL_FEE_KEYWORDS = /\b(fee|fees|paid|due|dues|balance|pending|receipt|tuition|installment|scholarship|payment|statement|invoice)\b/i;
 const MISC_KEYWORDS = /\b(help|what can you do|commands|options|hello|hi|hey|greetings|clear|who are you|reset)\b/i;
 const SHOW_MORE_REGEX = /\b(show more|list all|all .* students|show all .* students|more for)\b/i;
 
-// 2. TIME PERIOD REGEX PATTERNS
-const PERIOD_PATTERNS: Record<TimePeriodType, RegExp> = {
-  CURRENT_SEM: /\b(current sem|current semester|this semester|this sem|odd sem|odd semester)\b/i,
-  ODD_SEM: /\b(odd sem|odd semester|semester 1|sem 1|semester 3|sem 3|semester 5|sem 5|semester 7|sem 7)\b/i,
-  EVEN_SEM: /\b(even sem|even semester|semester 2|sem 2|semester 4|sem 4|semester 6|sem 6|semester 8|sem 8)\b/i,
-  PREV_SEM: /\b(last sem|last semester|previous sem|previous semester)\b/i,
-  MONTH: /\b(this month|last month|current month|monthly)\b/i,
-  ALL_TIME: /\b(overall|all time|total|cumulative|complete|history)\b/i,
-  YEAR_2025_26: /\b(2025-26|2025|2026|academic year 2025-26)\b/i,
-};
-
-// 3. SCOPE REGEX PATTERNS
-const SCOPE_REGEX = {
-  AGGREGATE: /\b(overall|average|class average|batch|department|dept|branch|college|institution|entire|all students|collection summary)\b/i,
-  OVERDUE: /\b(overdue|defaulter|defaulters|unpaid|shortage list|below 75|detained)\b/i,
-};
-
-// 4. EXPORT INTENT REGEX PATTERNS
-const EXPORT_REGEX = {
-  PDF: /\b(pdf|download pdf|export pdf|print pdf|save as pdf)\b/i,
-  XLSX: /\b(excel|xlsx|spreadsheet|csv|export excel|download sheet)\b/i,
-  DOCS: /\b(word|doc|docx|document|export doc)\b/i,
-};
-
-// 5. COURSE & DEPARTMENT EXTRACTION
+// Department & Course Extraction
 const COURSE_PATTERNS: Record<string, RegExp> = {
   'B.E. CSE': /\b(cse|computer science|comp sci|b\.?e\.?\s*cse)\b/i,
   'B.E. IT': /\b(it|information technology|b\.?e\.?\s*it)\b/i,
@@ -66,7 +65,7 @@ const COURSE_PATTERNS: Record<string, RegExp> = {
 
 export class OrchestratorAgent {
   /**
-   * Sanitizes input to prevent injection
+   * Sanitizes input
    */
   public static sanitizeInput(input: string): string {
     if (!input || typeof input !== 'string') return '';
@@ -77,26 +76,38 @@ export class OrchestratorAgent {
       .replace(/\s+/g, ' ');
   }
 
-  private static extractPeriod(query: string): TimePeriodType {
-    for (const [period, regex] of Object.entries(PERIOD_PATTERNS) as [TimePeriodType, RegExp][]) {
-      if (regex.test(query)) {
-        return period;
-      }
+  /**
+   * Classifies query into clean intent categories
+   */
+  public static classifyIntent(query: string, hasCandidates: boolean): QueryIntentCategory {
+    const clean = query.toLowerCase();
+
+    // 1. General Misc / Capabilities Questions
+    if (MISC_KEYWORDS.test(clean) && !hasCandidates) {
+      return 'MISC';
     }
-    return 'CURRENT_SEM';
-  }
 
-  private static extractScope(query: string, hasResolvedStudent: boolean): QueryScopeType {
-    if (SCOPE_REGEX.OVERDUE.test(query)) return 'OVERDUE';
-    if (SCOPE_REGEX.AGGREGATE.test(query) && !hasResolvedStudent) return 'AGGREGATE';
-    return 'SOLO';
-  }
+    // 2. Explicit Collective Queries (Bypasses individual student resolver)
+    if (COLLECTIVE_ATTENDANCE_REGEX.test(clean)) {
+      return 'COLLECTIVE_ATTENDANCE';
+    }
+    if (COLLECTIVE_FEE_REGEX.test(clean)) {
+      return 'COLLECTIVE_FEE';
+    }
 
-  private static extractFormat(query: string): ExportFormatType {
-    if (EXPORT_REGEX.PDF.test(query)) return 'PDF';
-    if (EXPORT_REGEX.XLSX.test(query)) return 'XLSX';
-    if (EXPORT_REGEX.DOCS.test(query)) return 'DOCS';
-    return 'NONE';
+    // 3. Individual Queries
+    if (hasCandidates || /['’]s|\bfor\b|\bof\b|\bstudent\b/i.test(query)) {
+      if (INDIVIDUAL_ATTENDANCE_KEYWORDS.test(clean)) return 'INDIVIDUAL_ATTENDANCE';
+      if (INDIVIDUAL_FEE_KEYWORDS.test(clean)) return 'INDIVIDUAL_FEE';
+      return 'STUDENT_LOOKUP';
+    }
+
+    // 4. General Intents
+    if (INDIVIDUAL_ATTENDANCE_KEYWORDS.test(clean)) return 'COLLECTIVE_ATTENDANCE';
+    if (INDIVIDUAL_FEE_KEYWORDS.test(clean)) return 'COLLECTIVE_FEE';
+    if (MISC_KEYWORDS.test(clean)) return 'MISC';
+
+    return 'UNKNOWN';
   }
 
   private static extractCourse(query: string): string | undefined {
@@ -106,22 +117,6 @@ export class OrchestratorAgent {
       }
     }
     return undefined;
-  }
-
-  private static async matchIntentTier2(query: string): Promise<{ agent: AgentType; confidence: number } | null> {
-    const clean = query.toLowerCase();
-
-    if (clean.includes('att') || clean.includes('present') || clean.includes('absent') || clean.includes('classes') || clean.includes('percent')) {
-      return { agent: 'ATTENDANCE', confidence: 0.85 };
-    }
-    if (clean.includes('fee') || clean.includes('pay') || clean.includes('dues') || clean.includes('pend') || clean.includes('cost') || clean.includes('money')) {
-      return { agent: 'FEE', confidence: 0.85 };
-    }
-    if (clean.includes('help') || clean.includes('what') || clean.includes('how') || clean.includes('menu')) {
-      return { agent: 'MISC', confidence: 0.80 };
-    }
-
-    return null;
   }
 
   /**
@@ -138,12 +133,63 @@ export class OrchestratorAgent {
       };
     }
 
-    // Step 1: Detect Intent
-    const isAttendanceIntent = ATTENDANCE_KEYWORDS.test(sanitized);
-    const isFeeIntent = FEE_KEYWORDS.test(sanitized);
+    // Extract potential student candidates
+    const candidates = StudentService.extractCandidates(rawInput);
+    const targetCourse = this.extractCourse(sanitized);
+    const intent = this.classifyIntent(sanitized, candidates.length > 0);
+
+    // =========================================================================
+    // 🔴 ROUTING PRIORITY 1 — COLLECTIVE QUERIES (Bypasses StudentResolver)
+    // =========================================================================
+    if (intent === 'COLLECTIVE_ATTENDANCE') {
+      const result: CollectiveAttendanceResult = await CollectiveAttendanceAgent.execute({
+        userId,
+        targetCourse,
+        rawQuery: sanitized,
+      });
+
+      return {
+        text: result.text,
+        agent: 'COLLECTIVE_ATTENDANCE',
+        confidenceTier: 'TIER_1_REGEX',
+        quickActions: result.quickActions,
+      };
+    }
+
+    if (intent === 'COLLECTIVE_FEE') {
+      const result: CollectiveFeeResult = await CollectiveFeeAgent.execute({
+        userId,
+        targetCourse,
+        rawQuery: sanitized,
+      });
+
+      return {
+        text: result.text,
+        agent: 'COLLECTIVE_FEE',
+        confidenceTier: 'TIER_1_REGEX',
+        quickActions: result.quickActions,
+      };
+    }
+
+    if (intent === 'MISC') {
+      return {
+        text: "👋 **GRADit Assistant Capabilities:**\n\n" +
+          "• **Individual Attendance:** *\"Rahul's attendance\"* or *\"Show attendance for 2025CSE019\"*\n" +
+          "• **Individual Fees:** *\"What is Rahul's pending fee?\"*\n" +
+          "• **Collective Attendance:** *\"Overall attendance\"* or *\"Attendance shortage list\"*\n" +
+          "• **Collective Fees:** *\"Total fees collected\"* or *\"Students with pending fees\"*",
+        agent: 'MISC',
+        confidenceTier: 'TIER_1_REGEX'
+      };
+    }
+
+    // =========================================================================
+    // 🔴 ROUTING PRIORITY 2 — INDIVIDUAL STUDENT RESOLUTION
+    // =========================================================================
+    const isAttendanceIntent = INDIVIDUAL_ATTENDANCE_KEYWORDS.test(sanitized);
+    const isFeeIntent = INDIVIDUAL_FEE_KEYWORDS.test(sanitized);
     const intentSuffix = isAttendanceIntent ? 'attendance' : isFeeIntent ? 'pending fee' : 'details';
 
-    // Step 2: Student Resolution via Deterministic Hierarchy
     const resolution: StudentResolutionContract = await StudentResolver.resolve(sanitized);
 
     // Case A: CONNECTION_ERROR
@@ -156,13 +202,13 @@ export class OrchestratorAgent {
       };
     }
 
-    // Case B: AMBIGUOUS (Multiple Students Match -> NEVER Select Automatically)
+    // Case B: AMBIGUOUS (Multiple matches -> Return suggestions, NEVER call sub-agents)
     if (resolution.status === 'AMBIGUOUS' && resolution.matches && resolution.matches.length > 1) {
       const allMatches = resolution.matches;
       const searchTerm = resolution.searchTerm;
       const isShowMore = SHOW_MORE_REGEX.test(sanitized);
 
-      // If user clicked "Show More" / "Show all {name} students", render remaining (matches 4 onwards)
+      // Pagination expansion for Show More (matches 4 onwards)
       if (isShowMore && allMatches.length > 3) {
         const remainingList = allMatches.slice(3);
         let remText = `🔍 **Remaining ${remainingList.length} students matching "${searchTerm}":**\n\n`;
@@ -224,12 +270,9 @@ export class OrchestratorAgent {
       };
     }
 
-    // Step 3: Check Candidate Presence for Solo vs Aggregate Scoping
-    const candidates = StudentService.extractCandidates(rawInput);
-    const isExplicitSolo = /['’]s|\bfor\b|\bof\b|\bstudent\b/i.test(rawInput) || /\b(my|i|me|mine)\b/i.test(sanitized) || candidates.length > 0;
-    
-    // Case C: NOT_FOUND for an individual student search
-    if (resolution.status === 'NOT_FOUND' && isExplicitSolo && !SCOPE_REGEX.AGGREGATE.test(sanitized)) {
+    // Case C: NOT_FOUND for individual student search
+    const isExplicitSolo = /['’]s|\bfor\b|\bof\b|\bstudent\b/i.test(rawInput) || candidates.length > 0;
+    if (resolution.status === 'NOT_FOUND' && isExplicitSolo) {
       return {
         text: "I couldn't find a student matching that name.",
         agent: isAttendanceIntent ? 'ATTENDANCE' : isFeeIntent ? 'FEE' : 'ORCHESTRATOR',
@@ -246,42 +289,15 @@ export class OrchestratorAgent {
       class: resolution.student.class,
     } : undefined;
 
-    // Step 4: Extract Modifiers
-    const format = this.extractFormat(sanitized);
-    const period = this.extractPeriod(sanitized);
-    const scope = this.extractScope(sanitized, Boolean(resolvedStudent));
-    const targetCourse = this.extractCourse(sanitized);
-
-    // Step 5: Route to Target Agent
-    let targetAgent: AgentType = 'UNKNOWN';
-    let confidenceTier: 'TIER_1_REGEX' | 'TIER_2_FUZZY' | 'TIER_3_FALLBACK' = 'TIER_1_REGEX';
-
-    if (isAttendanceIntent) {
-      targetAgent = 'ATTENDANCE';
-    } else if (isFeeIntent) {
-      targetAgent = 'FEE';
-    } else if (MISC_KEYWORDS.test(sanitized)) {
-      targetAgent = 'MISC';
-    }
-
-    if (targetAgent === 'UNKNOWN') {
-      const fuzzyMatch = await this.matchIntentTier2(sanitized);
-      if (fuzzyMatch) {
-        targetAgent = fuzzyMatch.agent;
-        confidenceTier = 'TIER_2_FUZZY';
-      } else if (resolvedStudent) {
-        targetAgent = 'ATTENDANCE';
-        confidenceTier = 'TIER_1_REGEX';
-      }
-    }
-
-    // Step 6: Delegate to Sub-Agents (Only with Resolved Student or Valid Aggregate Query)
+    // =========================================================================
+    // 🔴 ROUTING PRIORITY 3 — SUB-AGENT DELEGATION
+    // =========================================================================
     try {
-      if (targetAgent === 'ATTENDANCE') {
+      if (isAttendanceIntent || (resolvedStudent && !isFeeIntent)) {
         const result: AttendanceAgentResult = await AttendanceAgent.execute({
           userId,
-          period,
-          scope,
+          period: 'CURRENT_SEM',
+          scope: 'SOLO',
           resolvedStudent: resolvedStudent ? {
             id: resolvedStudent.id,
             name: resolvedStudent.name,
@@ -293,25 +309,25 @@ export class OrchestratorAgent {
           } : null,
           targetStudent: resolvedStudent?.name,
           targetCourse,
-          format,
+          format: 'NONE',
           rawQuery: sanitized
         });
 
         return {
           text: result.text,
           agent: 'ATTENDANCE',
-          confidenceTier,
+          confidenceTier: 'TIER_1_REGEX',
           resolvedStudent,
           exportPayload: result.exportPayload,
           exportFormat: result.exportFormat
         };
       }
 
-      if (targetAgent === 'FEE') {
+      if (isFeeIntent) {
         const result: FeeAgentResult = await FeeAgent.execute({
           userId,
-          period,
-          scope,
+          period: 'CURRENT_SEM',
+          scope: 'SOLO',
           resolvedStudent: resolvedStudent ? {
             id: resolvedStudent.id,
             name: resolvedStudent.name,
@@ -323,35 +339,35 @@ export class OrchestratorAgent {
           } : null,
           targetStudent: resolvedStudent?.name,
           targetCourse,
-          format,
+          format: 'NONE',
           rawQuery: sanitized
         });
 
         return {
           text: result.text,
           agent: 'FEE',
-          confidenceTier,
+          confidenceTier: 'TIER_1_REGEX',
           resolvedStudent,
           exportPayload: result.exportPayload,
           exportFormat: result.exportFormat
         };
       }
 
-      if (targetAgent === 'MISC') {
+      if (MISC_KEYWORDS.test(sanitized)) {
         return {
           text: "👋 **GRADit Assistant Capabilities:**\n\n" +
-            "• **Student Attendance:** Check course attendance, shortage alerts, and exam eligibility (e.g. *\"Rahul's attendance\"* or *\"Show attendance for 2025CSE019\"*)\n" +
-            "• **Fee Statements:** Query pending dues, paid amounts, and due dates (e.g. *\"What is Rahul's pending fee?\"*)\n" +
-            "• **Institutional Reports:** View aggregate stats (e.g. *\"Overall attendance\"* or *\"Fee collection summary\"*)\n" +
-            "• **Export Support:** Add *\"as PDF\"* or *\"as Excel\"* to generate downloadable transcripts.",
+            "• **Individual Attendance:** *\"Rahul's attendance\"* or *\"Show attendance for 2025CSE019\"*\n" +
+            "• **Individual Fees:** *\"What is Rahul's pending fee?\"*\n" +
+            "• **Collective Attendance:** *\"Overall attendance\"* or *\"Attendance shortage list\"*\n" +
+            "• **Collective Fees:** *\"Total fees collected\"* or *\"Students with pending fees\"*",
           agent: 'MISC',
           confidenceTier: 'TIER_1_REGEX'
         };
       }
 
-      // Tier 3 Fallback
+      // Fallback
       return {
-        text: "I couldn't quite understand that query.\n\nYou can ask about:\n• Student attendance (e.g. *\"Rahul's attendance\"*)\n• Fee status (e.g. *\"Rahul's pending fee\"*)\n• Class/College summaries (e.g. *\"Overall attendance\"*)",
+        text: "I couldn't quite understand that query.\n\nYou can ask about:\n• Student attendance (e.g. *\"Rahul's attendance\"*)\n• Fee status (e.g. *\"Rahul's pending fee\"*)\n• Overall attendance (e.g. *\"Overall attendance\"*)\n• Fee summaries (e.g. *\"Total fees collected\"*)",
         agent: 'UNKNOWN',
         confidenceTier: 'TIER_3_FALLBACK'
       };

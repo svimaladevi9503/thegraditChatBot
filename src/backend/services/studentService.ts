@@ -31,11 +31,13 @@ export type QueryStatus = 'SUCCESS' | 'NOT_FOUND' | 'CONNECTION_ERROR';
 const STOP_WORDS = new Set([
   'what', 'is', 'the', 'for', 'of', 'and', 'to', 'in', 'a', 'an', 'show', 'tell',
   'check', 'get', 'give', 'me', 'details', 'status', 'record', 'records', 'report',
-  'attendance', 'fee', 'fees', 'pending', 'due', 'paid', 'total', 'my', 'student', 'students',
+  'attendance', 'fee', 'fees', 'pending', 'due', 'dues', 'paid', 'total', 'my', 'student', 'students',
   'pdf', 'excel', 'xlsx', 'docx', 'doc', 'download', 'export', 'current', 'sem', 'as',
-  'semester', 'year', '2024', '2025', '2026', '2027', '2025-26', '2024-25', 'odd', 'even', 'how', 'much',
+  'semester', 'year', '2024', '2025', '2026', '2027', '2025-26', '2024-25', 'odd', 'even', 'how', 'much', 'many',
   'overall', 'collection', 'summary', 'all', 'college', 'class', 'wise', 'list', 'more', 'named', 'about',
-  'please', 'can', 'you', 'give', 'info', 'information', 'check', 'view'
+  'please', 'can', 'you', 'give', 'info', 'information', 'view', 'do', 'who', 'eligible', 'eligibility',
+  'exam', 'exams', 'below', 'above', 'shortage', 'audit', 'help', 'commands', 'hello', 'hi', 'hey', 'greetings',
+  'are', 'was', 'were', 'have', 'has', 'had', 'been', 'with', 'by', 'from'
 ]);
 
 // Lightweight defensive candidate extraction regex patterns

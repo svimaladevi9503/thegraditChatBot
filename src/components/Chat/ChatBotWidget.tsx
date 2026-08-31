@@ -14,9 +14,9 @@ import { ChatInput } from './ChatInput';
 
 const SUGGESTIONS = [
   "Rahul's attendance",
-  "Show pending fees",
+  "Rahul's pending fee",
   "Overall attendance",
-  "Fee collection summary"
+  "Total fees collected"
 ];
 
 export const ChatBotWidget: React.FC = () => {
